@@ -1,0 +1,14 @@
+{
+    "_description": "라쿠텐 이치바 뷰티 장르 ID 매핑 (동적 보충됨)",
+    "_updated": "2026-03-04",
+    "root": {
+        "id": 100939,
+        "name": "美容・コスメ・香水"
+    },
+    "priority_genres": [
+        {"id": 100944, "name": "スキンケア", "priority": 1},
+        {"id": 564517, "name": "韓国コスメ", "priority": 1},
+        {"id": 111120, "name": "香水・フレグランス", "priority": 3}
+    ],
+    "_note": "하위 장르 ID는 trend_rakuten.py의 fetch_beauty_sub_genres()가 API로 자동 갱신합니다."
+}
