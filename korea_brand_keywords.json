@@ -1,0 +1,39 @@
+{
+    "_description": "한국 뷰티 브랜드 일본어 키워드 매핑 (트렌드 필터링용)",
+    "_updated": "2026-03-04",
+    "brands": {
+        "TIRTIR": ["ティルティル", "TIRTIR"],
+        "ANUA": ["アヌア", "ANUA"],
+        "d'Alba": ["ダルバ", "d'Alba", "dalba"],
+        "COSRX": ["COSRX", "コスアールエックス"],
+        "MISSHA": ["ミシャ", "MISSHA"],
+        "innisfree": ["イニスフリー", "innisfree"],
+        "ETUDE": ["エチュード", "ETUDE"],
+        "CLIO": ["クリオ", "CLIO"],
+        "PERIPERA": ["ペリペラ", "PERIPERA"],
+        "rom&nd": ["ロムアンド", "rom&nd", "romand"],
+        "hince": ["ヒンス", "hince"],
+        "LANEIGE": ["ラネージュ", "LANEIGE"],
+        "Torriden": ["トリデン", "Torriden"],
+        "medicube": ["メディキューブ", "medicube"],
+        "VT Cosmetics": ["VTcosmetic", "VT "],
+        "BIOHEAL BOH": ["BIOHEAL", "バイオヒール"],
+        "NATURE REPUBLIC": ["ネイチャーリパブリック", "NATURE REPUBLIC"],
+        "SKINFOOD": ["スキンフード", "SKINFOOD"],
+        "banila co": ["バニラコ", "banila co"],
+        "AMUSE": ["アミューズ", "AMUSE"],
+        "Wonjungyo": ["ウォンジョンヨ", "Wonjungyo"],
+        "KUNDAL": ["クンダル", "KUNDAL"],
+        "Dr.G": ["ドクタージー", "Dr.G"],
+        "JUNG SAEM MOOL": ["ジョンセンムル", "JUNG SAEM MOOL"],
+        "SOME BY MI": ["サムバイミー", "SOME BY MI"],
+        "SKIN1004": ["スキン1004", "SKIN1004"],
+        "THANK YOU FARMER": ["サンキューファーマー", "THANK YOU FARMER"],
+        "Sulwhasoo": ["ソルファス", "Sulwhasoo", "雪花秀"],
+        "LAKA": ["ラカ", "LAKA"],
+        "espoir": ["エスポア", "espoir"]
+    },
+    "generic_keywords": [
+        "韓国", "韓国コスメ", "Korea", "Korean", "シカ", "CICA"
+    ]
+}
