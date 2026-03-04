@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ═══════════════════════════════════════════════
 BASE_URL = "https://kj9603.xn--o39akkw25as0i.com"
-LOGIN_URL = f"{BASE_URL}/member_login.php"
+LOGIN_URL = f"{BASE_URL}/member/login.php"
 SEARCH_URL = f"{BASE_URL}/search.php"
 CATEGORY_URL = f"{BASE_URL}/mcategory.php"
 ITEM_URL = f"{BASE_URL}/mitem.php"
@@ -205,18 +205,17 @@ def _login(driver):
         _dismiss_alert(driver)
 
         # ID 입력
-        id_field = WebDriverWait(driver, 10).until(
+        id_field = WebDriverWait(driver, 15).until(
             EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "input[name='id'], input[name='user_id'], input#id")
+                (By.CSS_SELECTOR, "input[name='id']")
             )
         )
         id_field.clear()
         id_field.send_keys(KJ_ID)
 
-        # PW 입력
         pw_field = driver.find_element(
             By.CSS_SELECTOR,
-            "input[name='pw'], input[name='password'], input[name='passwd'], input#pw"
+            "input[name='pw']"
         )
         pw_field.clear()
         pw_field.send_keys(KJ_PW)
@@ -224,7 +223,7 @@ def _login(driver):
         # 로그인 버튼
         login_btn = driver.find_element(
             By.CSS_SELECTOR,
-            "button[type='submit'], input[type='submit'], .login_btn, .btn_login"
+            "button[type='submit'], input[type='submit']"
         )
         login_btn.click()
         time.sleep(3)
