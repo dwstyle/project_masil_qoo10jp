@@ -1,0 +1,173 @@
+{
+  "_description": "KJ9603 뷰티 카테고리 전체 맵 (2026-03-04 확정)",
+  "_total": "루트 1 + 중분류 13 + 소분류 73 = 87개",
+  "root": {
+    "id": 679,
+    "name_kr": "뷰티",
+    "name_jp": "ビューティー"
+  },
+  "priority_categories": [680, 688, 695, 701, 709, 747],
+  "categories": {
+    "680": {
+      "name_kr": "스킨케어",
+      "name_jp": "スキンケア",
+      "kse_weight": "light",
+      "children": {
+        "681": {"name_kr": "기초세트", "name_jp": "基礎セット", "kse_category": "세트/키트"},
+        "682": {"name_kr": "스킨", "name_jp": "化粧水", "kse_category": "토너/스킨"},
+        "683": {"name_kr": "로션", "name_jp": "乳液", "kse_category": "로션/에멀전"},
+        "684": {"name_kr": "에센스/세럼/앰플", "name_jp": "美容液/セラム/アンプル", "kse_category": "세럼/에센스"},
+        "685": {"name_kr": "미스트", "name_jp": "ミスト", "kse_category": "스킨케어"},
+        "686": {"name_kr": "오일", "name_jp": "オイル", "kse_category": "스킨케어"},
+        "687": {"name_kr": "크림/올인원", "name_jp": "クリーム/オールインワン", "kse_category": "크림"}
+      }
+    },
+    "688": {
+      "name_kr": "메이크업",
+      "name_jp": "メイクアップ",
+      "kse_weight": "light",
+      "children": {
+        "689": {"name_kr": "파운데이션", "name_jp": "ファンデーション", "kse_category": "베이스메이크업"},
+        "690": {"name_kr": "쿠션/팩트", "name_jp": "クッション/パクト", "kse_category": "베이스메이크업"},
+        "691": {"name_kr": "파우더/트윈케이크", "name_jp": "パウダー", "kse_category": "페이스메이크업"},
+        "692": {"name_kr": "메이크업베이스", "name_jp": "メイクアップベース", "kse_category": "베이스메이크업"},
+        "693": {"name_kr": "BB크림/톤업크림", "name_jp": "BBクリーム/トーンアップクリーム", "kse_category": "베이스메이크업"},
+        "694": {"name_kr": "프라이머/색조", "name_jp": "プライマー/カラー", "kse_category": "페이스메이크업"},
+        "1017": {"name_kr": "립스틱/립밥", "name_jp": "リップスティック/リップバーム", "kse_category": "립메이크업"}
+      }
+    },
+    "695": {
+      "name_kr": "클렌징",
+      "name_jp": "クレンジング",
+      "kse_weight": "light",
+      "children": {
+        "696": {"name_kr": "클렌징로션/크림", "name_jp": "クレンジングローション/クリーム", "kse_category": "클렌징"},
+        "697": {"name_kr": "폼클렌징", "name_jp": "フォームクレンジング", "kse_category": "클렌징"},
+        "698": {"name_kr": "클렌징오일", "name_jp": "クレンジングオイル", "kse_category": "클렌징"},
+        "699": {"name_kr": "클렌징티슈/비누", "name_jp": "クレンジングティッシュ/石鹸", "kse_category": "클렌징"},
+        "700": {"name_kr": "립앤아이리무버/필링/스크럽", "name_jp": "リムーバー/ピーリング/スクラブ", "kse_category": "클렌징"}
+      }
+    },
+    "701": {
+      "name_kr": "마스크팩",
+      "name_jp": "マスクパック",
+      "kse_weight": "light",
+      "children": {
+        "702": {"name_kr": "마스크시트/팩", "name_jp": "シートマスク/パック", "kse_category": "마스크팩"},
+        "703": {"name_kr": "마사지크림/젤", "name_jp": "マッサージクリーム/ジェル", "kse_category": "크림"},
+        "704": {"name_kr": "워시오프팩/코팩/필오프팩", "name_jp": "ウォッシュオフパック/鼻パック", "kse_category": "마스크팩"},
+        "705": {"name_kr": "수면팩/슬리핑팩", "name_jp": "スリーピングパック", "kse_category": "마스크팩"}
+      }
+    },
+    "706": {
+      "name_kr": "홈케어",
+      "name_jp": "ホームケア",
+      "kse_weight": "light",
+      "children": {
+        "707": {"name_kr": "고기능성제품", "name_jp": "高機能製品", "kse_category": "스킨케어"},
+        "708": {"name_kr": "피부관리기", "name_jp": "美顔器", "kse_category": "뷰티툴"}
+      }
+    },
+    "709": {
+      "name_kr": "선케어",
+      "name_jp": "サンケア",
+      "kse_weight": "light",
+      "children": {
+        "710": {"name_kr": "선크림", "name_jp": "日焼け止めクリーム", "kse_category": "선케어"},
+        "711": {"name_kr": "선팩트/파우더", "name_jp": "サンパクト/パウダー", "kse_category": "선케어"},
+        "712": {"name_kr": "선스프레이", "name_jp": "サンスプレー", "kse_category": "선케어"}
+      }
+    },
+    "713": {
+      "name_kr": "헤어케어",
+      "name_jp": "ヘアケア",
+      "kse_weight": "sagawa",
+      "children": {
+        "714": {"name_kr": "샴푸/린스", "name_jp": "シャンプー/リンス", "kse_category": "헤어샴푸"},
+        "715": {"name_kr": "탈모케어", "name_jp": "育毛ケア", "kse_category": "헤어케어"},
+        "716": {"name_kr": "헤어에센스/트리트먼트", "name_jp": "ヘアエッセンス/トリートメント", "kse_category": "헤어트리트먼트"},
+        "717": {"name_kr": "헤어미스트/팩", "name_jp": "ヘアミスト/パック", "kse_category": "헤어케어"},
+        "718": {"name_kr": "헤어케어용품", "name_jp": "ヘアケア用品", "kse_category": "헤어케어"},
+        "1009": {"name_kr": "기타상품", "name_jp": "その他", "kse_category": "헤어케어"}
+      }
+    },
+    "719": {
+      "name_kr": "바디케어",
+      "name_jp": "ボディケア",
+      "kse_weight": "sagawa",
+      "children": {
+        "720": {"name_kr": "바디클렌저/비누", "name_jp": "ボディクレンザー/石鹸", "kse_category": "바디워시"},
+        "721": {"name_kr": "입욕제/스크럽/솔트", "name_jp": "入浴剤/スクラブ/ソルト", "kse_category": "바디케어"},
+        "722": {"name_kr": "바디로션/미스트/오일/크림", "name_jp": "ボディローション/ミスト/オイル", "kse_category": "바디로션"},
+        "723": {"name_kr": "여성청결제", "name_jp": "デリケートゾーンケア", "kse_category": "바디케어"},
+        "724": {"name_kr": "바디케어용품", "name_jp": "ボディケア用品", "kse_category": "바디케어"},
+        "1010": {"name_kr": "기타상품", "name_jp": "その他", "kse_category": "바디케어"}
+      }
+    },
+    "725": {
+      "name_kr": "핸드/풋케어",
+      "name_jp": "ハンド/フットケア",
+      "kse_weight": "light",
+      "children": {
+        "726": {"name_kr": "핸드크림", "name_jp": "ハンドクリーム", "kse_category": "바디케어"},
+        "727": {"name_kr": "풋크림/각질제거/발냄새제거제", "name_jp": "フットクリーム/角質ケア", "kse_category": "바디케어"},
+        "728": {"name_kr": "손세정/손소독제", "name_jp": "ハンドソープ/消毒液", "kse_category": "바디케어"},
+        "729": {"name_kr": "핸드/풋케어용품", "name_jp": "ハンド/フットケア用品", "kse_category": "바디케어"},
+        "730": {"name_kr": "네일케어", "name_jp": "ネイルケア", "kse_category": "네일"},
+        "1011": {"name_kr": "기타상품", "name_jp": "その他", "kse_category": "바디케어"}
+      }
+    },
+    "731": {
+      "name_kr": "남성화장품",
+      "name_jp": "メンズコスメ",
+      "kse_weight": "light",
+      "children": {
+        "732": {"name_kr": "스킨케어", "name_jp": "スキンケア", "kse_category": "스킨케어"},
+        "733": {"name_kr": "바디케어", "name_jp": "ボディケア", "kse_category": "바디케어"},
+        "734": {"name_kr": "헤어케어", "name_jp": "ヘアケア", "kse_category": "헤어케어"},
+        "735": {"name_kr": "쉐이빙케어", "name_jp": "シェービングケア", "kse_category": "스킨케어"},
+        "736": {"name_kr": "청결제", "name_jp": "洗浄剤", "kse_category": "바디케어"},
+        "737": {"name_kr": "면도용품", "name_jp": "シェービング用品", "kse_category": "뷰티툴"},
+        "738": {"name_kr": "제모용품", "name_jp": "脱毛用品", "kse_category": "뷰티툴"},
+        "1012": {"name_kr": "기타상품", "name_jp": "その他", "kse_category": "스킨케어"}
+      }
+    },
+    "739": {
+      "name_kr": "구강케어",
+      "name_jp": "オーラルケア",
+      "kse_weight": "light",
+      "children": {
+        "740": {"name_kr": "치약", "name_jp": "歯磨き粉", "kse_category": "바디케어"},
+        "741": {"name_kr": "치약칫솔세트", "name_jp": "歯磨きセット", "kse_category": "세트/키트"},
+        "742": {"name_kr": "칫솔", "name_jp": "歯ブラシ", "kse_category": "뷰티툴"},
+        "743": {"name_kr": "치실/치간칫솔", "name_jp": "デンタルフロス/歯間ブラシ", "kse_category": "뷰티툴"},
+        "744": {"name_kr": "구강청결제", "name_jp": "マウスウォッシュ", "kse_category": "바디케어"},
+        "745": {"name_kr": "혀클리너", "name_jp": "舌クリーナー", "kse_category": "뷰티툴"},
+        "746": {"name_kr": "치아미백용품", "name_jp": "ホワイトニング用品", "kse_category": "뷰티툴"}
+      }
+    },
+    "747": {
+      "name_kr": "향수",
+      "name_jp": "香水",
+      "kse_weight": "light",
+      "children": {
+        "748": {"name_kr": "여성향수", "name_jp": "レディース香水", "kse_category": "향수"},
+        "749": {"name_kr": "남성향수", "name_jp": "メンズ香水", "kse_category": "향수"},
+        "750": {"name_kr": "공용향수", "name_jp": "ユニセックス香水", "kse_category": "향수"},
+        "751": {"name_kr": "미니어처", "name_jp": "ミニチュア香水", "kse_category": "향수"}
+      }
+    },
+    "752": {
+      "name_kr": "이미용소품",
+      "name_jp": "ビューティー小物",
+      "kse_weight": "light",
+      "children": {
+        "753": {"name_kr": "메이크업/클렌징소품", "name_jp": "メイク/クレンジング小物", "kse_category": "뷰티툴"},
+        "754": {"name_kr": "피지/각질관리소품", "name_jp": "皮脂/角質ケア小物", "kse_category": "뷰티툴"},
+        "755": {"name_kr": "메이크업브러쉬/파우치", "name_jp": "メイクブラシ/ポーチ", "kse_category": "뷰티툴"},
+        "756": {"name_kr": "정리함", "name_jp": "収納ボックス", "kse_category": "뷰티툴"},
+        "757": {"name_kr": "기타이미용소품", "name_jp": "その他ビューティー小物", "kse_category": "뷰티툴"}
+      }
+    }
+  }
+}

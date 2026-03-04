@@ -1,670 +1,988 @@
 """
-crawler_kj.py – KJ9603 크롤링 모듈 (Qoo10 Japan Beauty 전용)
-Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.7
-
-기존 project_masil/crawler.py v4.0 기반으로 재구성.
-변경점:
-  1. 키워드 검색 기능 추가 (PHASE B: 트렌드 키워드 → KJ9603 매칭)
-  2. 상세 이미지 크롤링 추가 (detail_select1 img)
-  3. 네이버 API 키 분리 (NAVER_CLIENT_ID_QOO10)
-  4. 뷰티 카테고리 전용 필터링
+crawler_kj.py – KJ9603 크롤러 (Qoo10 Japan Beauty Sourcing)
+v0.9 – 2026-03-04
+- 실제 KJ9603 URL 구조 반영 (search.php?search_category=mall&search_keyword=)
+- kj9603_categories.json 로드 (13 중분류 + 73 소분류)
+- 카테고리 전체 순회 + 키워드 검색 이중 전략
+- 인기/추천/BEST 배지 가점
+- KSE 배송 카테고리 자동 매핑
 """
 
 import os
 import re
 import time
+import json
+import random
 import logging
-from urllib.parse import urljoin, quote
-
 import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait, Select
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 
 logger = logging.getLogger(__name__)
 
-# ── 상수 ──────────────────────────────────────────────────────
-BASE_URL       = "https://kj9603.xn--o39akkw25as0i.com"
-LOGIN_URL      = f"{BASE_URL}/member/login.php"
-SEARCH_URL     = f"{BASE_URL}/search.php"
+# ═══════════════════════════════════════════════
+# Constants
+# ═══════════════════════════════════════════════
+BASE_URL = "https://kj9603.xn--o39akkw25as0i.com"
+LOGIN_URL = f"{BASE_URL}/member_login.php"
+SEARCH_URL = f"{BASE_URL}/search.php"
+CATEGORY_URL = f"{BASE_URL}/mcategory.php"
+ITEM_URL = f"{BASE_URL}/mitem.php"
+
 PAGE_LOAD_WAIT = 10
-KJ_ID          = os.getenv("KJ9603_ID", "")
-KJ_PW          = os.getenv("KJ9603_PW", "")
+KJ_DEFAULT_SHIPPING = 3500
 
-# 큐텐 전용 네이버 API (기존 패션과 분리)
-NAVER_CLIENT_ID     = os.getenv("NAVER_CLIENT_ID_QOO10", "")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET_QOO10", "")
+# PASS 1 필터: 공급가 범위 (KRW)
+PASS1_MIN_PRICE = 3000
+PASS1_MAX_PRICE = 300000
 
-KJ_DEFAULT_SHIPPING = 3_500
+# 상세 이미지 셀렉터
+DETAIL_IMAGE_SELECTOR = "div.item_mall_info_explain_wrap img"
 
-# 상세 이미지 셀렉터 (v0.7 확인)
-DETAIL_IMAGE_SELECTOR = "div.item_mall_info_explain_wrap.detail_select1 img"
+# Naver API (QOO10 전용)
+NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID_QOO10", "")
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET_QOO10", "")
+
+# KJ9603 로그인 정보
+KJ_ID = os.environ.get("KJ9603_ID", "")
+KJ_PW = os.environ.get("KJ9603_PW", "")
+
+# 인기/추천/BEST 배지 가점
+BADGE_BONUS = {
+    "best": 15,
+    "인기": 12,
+    "추천": 10,
+    "hot": 10,
+    "new": 5,
+    "md추천": 12,
+    "히트": 10,
+}
+
+# 한국어 검색 키워드 (KJ9603는 한국 도매몰)
+SEARCH_KEYWORDS_KR = [
+    # ── 브랜드명 ──
+    "메디큐브", "쿤달", "VT", "라네즈", "이니스프리",
+    "달바", "아누아", "클리오", "코스알엑스", "롬앤",
+    "미샤", "티르티르", "네이처리퍼블릭", "바닐라코",
+    "스킨푸드", "에뛰드", "토니모리", "홀리카홀리카",
+    "마몽드", "헤라", "설화수", "CNP", "닥터지",
+    "구달", "라운드랩", "아이소이", "정샘물", "루나",
+    "조선미녀", "넘버즈", "메디힐", "JM솔루션",
+    "비플레인", "아비브", "스킨1004", "믹순",
+    # ── 카테고리 키워드 ──
+    "토너", "세럼", "에센스", "크림", "로션",
+    "선크림", "자외선차단", "클렌징", "폼클렌징",
+    "마스크팩", "시트마스크", "수분크림",
+    "쿠션", "파운데이션", "립스틱", "립틴트",
+    "아이라이너", "마스카라", "아이섀도우",
+    "샴푸", "트리트먼트", "바디워시", "바디로션",
+    "핸드크림", "선스틱", "앰플", "미스트",
+]
 
 
-# ══════════════════════════════════════════════════════════════
-# 1. WebDriver 세션 관리 (기존 동일)
-# ══════════════════════════════════════════════════════════════
-
-def get_session() -> webdriver.Chrome:
-    """헤드리스 Chrome 드라이버 생성 + KJ9603 로그인"""
-    opts = Options()
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
+# ═══════════════════════════════════════════════
+# 카테고리 JSON 로드
+# ═══════════════════════════════════════════════
+def _load_categories():
+    """kj9603_categories.json 로드"""
     try:
-        driver = webdriver.Chrome(options=opts)
-    except Exception:
-        from webdriver_manager.chrome import ChromeDriverManager
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=opts)
-
-    _login(driver)
-    return driver
-
-
-def close_driver(driver: webdriver.Chrome):
-    """WebDriver 종료"""
-    try:
-        driver.quit()
-        logger.info("WebDriver 종료 완료")
+        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kj9603_categories.json")
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            logger.info(f"카테고리 JSON 로드 완료: {len(data.get('categories', {}))}개 중분류")
+            return data
     except Exception as e:
-        logger.warning(f"[close_driver] 종료 중 오류: {e}")
+        logger.warning(f"카테고리 JSON 로드 실패: {e} — 하드코딩 기본값 사용")
+        return None
 
 
-def _login(driver: webdriver.Chrome):
+_CAT_DATA = _load_categories()
+
+# 중분류 ID 리스트
+BEAUTY_MID_CATEGORIES = (
+    list(_CAT_DATA["categories"].keys()) if _CAT_DATA
+    else ["680", "688", "695", "701", "706", "709", "713", "719",
+          "725", "731", "739", "747", "752"]
+)
+
+# 우선 탐색 카테고리 (일본 수출 수요 높은 순)
+PRIORITY_CATEGORIES = (
+    _CAT_DATA.get("priority_categories", [680, 688, 695, 701, 709, 747]) if _CAT_DATA
+    else [680, 688, 695, 701, 709, 747]
+)
+
+
+def get_kse_category(kj_category_id):
+    """KJ9603 카테고리 ID → KSE 배송비 카테고리 매핑"""
+    if not _CAT_DATA:
+        return "default"
+    cat_id = str(kj_category_id)
+    for mid_id, mid_data in _CAT_DATA["categories"].items():
+        children = mid_data.get("children", {})
+        if cat_id in children:
+            return children[cat_id].get("kse_category", "default")
+        if cat_id == mid_id:
+            if children:
+                first = list(children.values())[0]
+                return first.get("kse_category", "default")
+    return "default"
+
+
+def get_jp_name(kj_category_id):
+    """KJ9603 카테고리 ID → 일본어 카테고리명"""
+    if not _CAT_DATA:
+        return ""
+    cat_id = str(kj_category_id)
+    for mid_id, mid_data in _CAT_DATA["categories"].items():
+        if cat_id == mid_id:
+            return mid_data.get("name_jp", "")
+        children = mid_data.get("children", {})
+        if cat_id in children:
+            return children[cat_id].get("name_jp", "")
+    return ""
+
+
+def get_kr_name(kj_category_id):
+    """KJ9603 카테고리 ID → 한국어 카테고리명"""
+    if not _CAT_DATA:
+        return ""
+    cat_id = str(kj_category_id)
+    for mid_id, mid_data in _CAT_DATA["categories"].items():
+        if cat_id == mid_id:
+            return mid_data.get("name_kr", "")
+        children = mid_data.get("children", {})
+        if cat_id in children:
+            return children[cat_id].get("name_kr", "")
+    return ""
+
+
+# ═══════════════════════════════════════════════
+# WebDriver & Session
+# ═══════════════════════════════════════════════
+_driver = None
+
+
+def get_session():
+    """헤드리스 Chrome 세션 생성 + KJ9603 로그인"""
+    global _driver
+    if _driver:
+        return _driver
+
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
+    )
+
+    try:
+        service = Service(ChromeDriverManager().install())
+        _driver = webdriver.Chrome(service=service, options=options)
+    except Exception:
+        options.binary_location = "/usr/bin/chromium-browser"
+        _driver = webdriver.Chrome(options=options)
+
+    _driver.set_page_load_timeout(30)
+    _login(_driver)
+    return _driver
+
+
+def _login(driver):
     """KJ9603 로그인"""
     try:
         driver.get(LOGIN_URL)
-        _dismiss_alert(driver, timeout=3.0)
+        time.sleep(2)
+        _dismiss_alert(driver)
 
-        WebDriverWait(driver, PAGE_LOAD_WAIT).until(
-            EC.presence_of_element_located((By.NAME, "id"))
-        )
-        time.sleep(0.5)
-
-        id_el = driver.find_element(By.NAME, "id")
-        pw_el = driver.find_element(By.NAME, "pw")
-        id_el.clear()
-        id_el.send_keys(KJ_ID)
-        pw_el.clear()
-        pw_el.send_keys(KJ_PW)
-
-        btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
-        btn.click()
-
-        time.sleep(2.5)
-        _dismiss_alert(driver, timeout=3.0)
-
-        if "login" not in driver.current_url:
-            logger.info(f"KJ9603 로그인 성공: {driver.current_url}")
-        else:
-            body_text = driver.execute_script(
-                "return document.body.innerText.substring(0, 200);"
+        # ID 입력
+        id_field = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "input[name='id'], input[name='user_id'], input#id")
             )
-            logger.error(f"로그인 실패 | URL: {driver.current_url}")
-            logger.error(f"  페이지 내용: {body_text}")
+        )
+        id_field.clear()
+        id_field.send_keys(KJ_ID)
 
+        # PW 입력
+        pw_field = driver.find_element(
+            By.CSS_SELECTOR,
+            "input[name='pw'], input[name='password'], input[name='passwd'], input#pw"
+        )
+        pw_field.clear()
+        pw_field.send_keys(KJ_PW)
+
+        # 로그인 버튼
+        login_btn = driver.find_element(
+            By.CSS_SELECTOR,
+            "button[type='submit'], input[type='submit'], .login_btn, .btn_login"
+        )
+        login_btn.click()
+        time.sleep(3)
+        _dismiss_alert(driver)
+
+        logger.info(f"KJ9603 로그인 성공: {driver.current_url}")
     except Exception as e:
-        logger.error(f"로그인 오류: {e}")
+        logger.error(f"KJ9603 로그인 실패: {e}")
+        raise
 
 
-# ══════════════════════════════════════════════════════════════
-# 2. 공통 유틸 (기존 동일)
-# ══════════════════════════════════════════════════════════════
-
-def _dismiss_alert(driver, timeout: float = 3.0) -> bool:
-    """JavaScript alert 감지 시 자동 수락"""
+def _dismiss_alert(driver):
+    """팝업 알림 닫기"""
     try:
-        WebDriverWait(driver, timeout).until(EC.alert_is_present())
         alert = driver.switch_to.alert
-        logger.debug(f"[Alert] 감지 → 수락: {alert.text}")
         alert.accept()
-        time.sleep(0.5)
-        return True
     except Exception:
-        return False
+        pass
 
 
-def _price_text_to_int(text: str) -> int:
-    """가격 텍스트에서 숫자 추출"""
-    nums = re.findall(r"[\d,]+", text)
-    for n in nums:
-        val = n.replace(",", "")
-        if val.isdigit() and int(val) > 0:
-            return int(val)
-    return 0
+def close_driver():
+    """WebDriver 종료"""
+    global _driver
+    if _driver:
+        try:
+            _driver.quit()
+        except Exception:
+            pass
+        _driver = None
 
 
-def _parse_shipping_fee(text: str) -> int:
-    """
-    배송비 텍스트 파싱 (원)
-    - "무료배송" → 0
-    - "3,500원" → 3500
-    - "10 개당 4,000원" → 4000
-    - "착불" / 파싱 실패 → KJ_DEFAULT_SHIPPING
-    """
-    if not text or not text.strip():
-        return KJ_DEFAULT_SHIPPING
-
-    text = text.strip()
-
-    if re.search(r"무료", text):
+# ═══════════════════════════════════════════════
+# 유틸리티
+# ═══════════════════════════════════════════════
+def _price_text_to_int(text):
+    """'12,900원' → 12900"""
+    if not text:
         return 0
+    nums = re.sub(r'[^\d]', '', str(text))
+    return int(nums) if nums else 0
 
-    m = re.search(r"(\d+)\s*개당\s*([\d,]+)\s*원", text)
-    if m:
-        return int(m.group(2).replace(",", ""))
 
-    m = re.search(r"([\d,]+)\s*원", text)
-    if m:
-        fee = int(m.group(1).replace(",", ""))
-        if fee > 0:
-            return fee
-
+def _parse_shipping_fee(text):
+    """배송비 텍스트 → 정수 KRW"""
+    if not text:
+        return KJ_DEFAULT_SHIPPING
+    text = text.strip()
+    if "무료" in text or "free" in text.lower() or "0원" in text:
+        return 0
+    match = re.search(r'[\d,]+', text)
+    if match:
+        return _price_text_to_int(match.group())
     return KJ_DEFAULT_SHIPPING
 
 
-# ══════════════════════════════════════════════════════════════
-# 3. 카테고리 상품 수집 (기존 동일)
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
+# 배지 감지 & 가점
+# ═══════════════════════════════════════════════
+def _detect_badges(element):
+    """상품 요소에서 인기/추천/BEST 배지 감지"""
+    badges = []
+    bonus = 0
+    if not element:
+        return badges, bonus
 
-def _parse_category_page(driver, category_url: str = "") -> list:
-    """
-    mcategory.php 페이지 파싱 → 상품 목록 반환
-    supply_price ← member4 (회원가), consumer_price ← cost4 (소비자정가)
-    """
-    soup = BeautifulSoup(driver.page_source, "lxml")
+    try:
+        item_text = element.get_text(separator=" ").lower()
+        item_html = str(element).lower()
 
-    product_tags = (
-        soup.select("li.category_mall_list_item.category_mall_list_item4")
-        or soup.select("li.category_mall_list_item")
-    )
+        for badge_key, badge_score in BADGE_BONUS.items():
+            key_lower = badge_key.lower()
+            if key_lower in item_text or key_lower in item_html:
+                badges.append(badge_key)
+                bonus = max(bonus, badge_score)
+    except Exception:
+        pass
 
-    if not product_tags:
-        logger.warning(f"[parse] 상품 태그 0개 (URL: {category_url})")
-        return []
+    # 이미지 alt/src에서도 검색
+    try:
+        for img in element.find_all("img"):
+            alt = (img.get("alt", "") or "").lower()
+            src = (img.get("src", "") or "").lower()
+            for badge_key, badge_score in BADGE_BONUS.items():
+                key_lower = badge_key.lower()
+                if key_lower in alt or key_lower in src:
+                    if badge_key not in badges:
+                        badges.append(badge_key)
+                        bonus = max(bonus, badge_score)
+    except Exception:
+        pass
 
+    return badges, bonus
+
+
+# ═══════════════════════════════════════════════
+# 상품 목록 파싱 (검색 & 카테고리 공용)
+# ═══════════════════════════════════════════════
+def _parse_product_list(soup, source_tag="search"):
+    """HTML에서 상품 리스트 추출"""
     items = []
-    for tag in product_tags:
-        a_tag = (
-            tag.select_one("div.category_mall_list_item_image a")
-            or tag.select_one("a[href*='mitem.php']")
-            or tag.select_one("a[href*='item=']")
-        )
-        if not a_tag:
-            continue
 
-        href = a_tag.get("href", "")
-        m = re.search(r"item=(\d+)", href)
-        if not m:
-            continue
+    # 셀렉터 후보 (KJ9603 구조)
+    selectors = [
+        "div.item_list_wrap li",
+        "ul.item_list li",
+        "div.goods_list li",
+        "div.product_list li",
+        ".item_cont",
+        ".goods_item",
+        "li.item",
+        "div.item_box",
+        "div.mall_list li",
+        "ul.mall_goods_list li",
+        "div.item_gallery_type li",
+        "ul.item_gallery_type li",
+    ]
 
-        item_id  = m.group(1)
-        full_url = urljoin(BASE_URL, href)
+    product_elements = []
+    used_selector = ""
+    for sel in selectors:
+        product_elements = soup.select(sel)
+        if product_elements:
+            used_selector = sel
+            break
 
-        # 상품명
-        name_tag = tag.select_one("div.category_mall_list_item_name4")
-        if name_tag:
-            name = name_tag.get("title", "").strip() or name_tag.get_text(strip=True)
-        else:
-            img_fb = tag.find("img")
-            name = img_fb.get("alt", "").strip() if img_fb else ""
+    # 최후 시도: mitem.php 링크 기반
+    if not product_elements:
+        link_parents = set()
+        for a_tag in soup.find_all("a", href=True):
+            if "mitem.php?item=" in a_tag["href"]:
+                parent = a_tag.parent
+                if parent and parent not in link_parents:
+                    link_parents.add(id(parent))
+                    product_elements.append(parent)
+        if product_elements:
+            used_selector = "mitem.php links (fallback)"
 
-        # 썸네일
-        img = tag.select_one("div.category_mall_list_item_image img") or tag.find("img")
-        thumbnail = ""
-        if img:
-            thumbnail = (
-                img.get("data-original", "")
-                or img.get("data-src", "")
-                or img.get("src", "")
-            )
+    if product_elements:
+        logger.info(f"  파싱 셀렉터: '{used_selector}' → {len(product_elements)}개")
+    else:
+        logger.warning(f"  [{source_tag}] 상품 태그 0개 — 셀렉터 매칭 실패")
+        # 디버그: 페이지 내 mitem 링크 수 로깅
+        mitem_links = soup.find_all("a", href=re.compile(r'mitem\.php\?item='))
+        logger.debug(f"  mitem.php 링크 수: {len(mitem_links)}")
 
-        # 가격
-        cost_tag     = tag.select_one("p.category_mall_item_price_cost4")
-        member_tag   = tag.select_one("p.category_mall_item_price_member4")
-        cheapest_tag = tag.select_one("span.category_mall_item_price_cheapest4")
-
-        consumer_price = _price_text_to_int(cost_tag.get_text())     if cost_tag     else 0
-        supply_price   = _price_text_to_int(member_tag.get_text())   if member_tag   else 0
-        cheapest_price = _price_text_to_int(cheapest_tag.get_text()) if cheapest_tag else 0
-
-        if supply_price == 0 and consumer_price > 0:
-            supply_price = consumer_price
-            logger.warning(f"[parse] 회원가 0원 → 소비자가 폴백: {name[:30]} ({consumer_price:,}원)")
-
-        # 배송비 (카테고리 페이지 임시값)
-        shipping_inc = tag.select_one("span.category_mall_item_contain_shipping_price_4")
-        kj_shipping  = 0 if shipping_inc else KJ_DEFAULT_SHIPPING
-
-        items.append({
-            "item_id":        item_id,
-            "name":           name,
-            "supply_price":   supply_price,
-            "consumer_price": consumer_price,
-            "cheapest_price": cheapest_price,
-            "kj_shipping":    kj_shipping,
-            "thumbnail":      thumbnail,
-            "url":            full_url,
-            "needs_detail":   (supply_price == 0),
-        })
+    seen_ids = set()
+    for elem in product_elements:
+        try:
+            item = _extract_product_from_element(elem, source_tag)
+            if item and item.get("product_id") and item["product_id"] not in seen_ids:
+                seen_ids.add(item["product_id"])
+                items.append(item)
+        except Exception as e:
+            logger.debug(f"  상품 파싱 오류: {e}")
 
     return items
 
 
-def get_category_products(driver, category_id: str, max_pages: int = 5) -> list:
-    """카테고리별 상품 수집 (페이지네이션)"""
-    all_items = []
-    seen_ids  = set()
+def _extract_product_from_element(elem, source_tag):
+    """개별 상품 요소 → 딕셔너리"""
+    item = {"source": source_tag}
 
-    for page in range(1, max_pages + 1):
-        url = (
-            f"{BASE_URL}/mcategory.php?category={category_id}"
-            if page == 1
-            else f"{BASE_URL}/mcategory.php?page={page}&category={category_id}"
-        )
-
-        try:
-            driver.get(url)
-            _dismiss_alert(driver, timeout=3.0)
-            WebDriverWait(driver, PAGE_LOAD_WAIT).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            time.sleep(1.2)
-            _dismiss_alert(driver, timeout=2.0)
-        except Exception as e:
-            logger.error(f"[get_category_products] 로드 실패 (id={category_id}, page={page}): {e}")
-            break
-
-        page_items = _parse_category_page(driver, url)
-        if not page_items:
-            break
-
-        new_count = 0
-        for item in page_items:
-            if item["item_id"] not in seen_ids:
-                seen_ids.add(item["item_id"])
-                all_items.append(item)
-                new_count += 1
-
-        logger.info(f"[category] id={category_id} page={page} → 신규 {new_count}개 (누적 {len(all_items)}개)")
-        if new_count == 0:
-            break
-        time.sleep(0.8)
-
-    return all_items
-
-
-# ══════════════════════════════════════════════════════════════
-# 4. 키워드 검색 (신규 – PHASE B)
-# ══════════════════════════════════════════════════════════════
-
-def search_products(driver, keyword: str, max_pages: int = 3) -> list:
-    """
-    KJ9603 내부 검색으로 키워드 매칭 상품 수집
-    Args:
-        driver: 로그인된 WebDriver
-        keyword: 검색어 (한국어 또는 영문 브랜드명)
-        max_pages: 최대 페이지 수
-    Returns:
-        list of dict (상품 정보)
-    """
-    all_items = []
-    seen_ids  = set()
-
-    for page in range(1, max_pages + 1):
-        if page == 1:
-            url = f"{SEARCH_URL}?keyword={quote(keyword)}"
+    # ── 링크 & ID ──
+    link_tag = elem.find("a", href=True)
+    if not link_tag:
+        if elem.name == "a" and elem.get("href"):
+            link_tag = elem
         else:
-            url = f"{SEARCH_URL}?page={page}&keyword={quote(keyword)}"
+            return None
 
+    href = link_tag["href"]
+    match = re.search(r'item=(\d+)', href)
+    if not match:
+        return None
+
+    item["product_id"] = match.group(1)
+    if href.startswith("http"):
+        item["url"] = href
+    else:
+        item["url"] = f"{BASE_URL}/{href.lstrip('/')}"
+
+    # ── 상품명 ──
+    name_selectors = [
+        ".item_name", ".goods_name", ".prd_name", ".name",
+        "p.name", "span.name", "div.name", "strong.name",
+        ".item_tit", ".goods_tit", "h3", "h4",
+        ".item_gallery_name", ".mall_item_name",
+    ]
+    name = ""
+    for ns in name_selectors:
+        tag = elem.select_one(ns)
+        if tag:
+            name = tag.get_text(strip=True)
+            break
+    if not name:
+        img = elem.find("img")
+        if img:
+            name = img.get("alt", "").strip()
+    if not name:
+        name = link_tag.get_text(strip=True)
+    item["name"] = name[:200] if name else f"상품_{item['product_id']}"
+
+    # ── 공급가 (회원가) ──
+    price_selectors = [
+        ".member_price", ".item_price", ".price", ".sale_price",
+        ".goods_price", "span.price", "strong.price",
+        ".cost4", ".member4", ".item_gallery_price",
+        ".mall_item_price",
+    ]
+    for ps in price_selectors:
+        tag = elem.select_one(ps)
+        if tag:
+            val = _price_text_to_int(tag.get_text())
+            if val > 0:
+                item["supply_price"] = val
+                break
+
+    # ── 소비자가 ──
+    consumer_selectors = [".consumer_price", ".org_price", ".before_price", ".cost", "del", "s"]
+    for cs in consumer_selectors:
+        tag = elem.select_one(cs)
+        if tag:
+            val = _price_text_to_int(tag.get_text())
+            if val > 0:
+                item["consumer_price"] = val
+                break
+
+    # ── 이미지 ──
+    img_tag = elem.find("img")
+    if img_tag:
+        src = img_tag.get("src", "") or img_tag.get("data-src", "") or img_tag.get("data-original", "")
+        if src and not src.startswith("http"):
+            src = f"{BASE_URL}/{src.lstrip('/')}"
+        item["image_url"] = src
+
+    # ── 배지 ──
+    badges, bonus = _detect_badges(elem)
+    item["badges"] = badges
+    item["badge_bonus"] = bonus
+
+    return item
+
+
+# ═══════════════════════════════════════════════
+# 키워드 검색
+# ═══════════════════════════════════════════════
+def search_products(driver, keyword, max_pages=3):
+    """KJ9603 키워드 검색 (한국어)"""
+    all_items = []
+    seen_ids = set()
+
+    for page in range(1, max_pages + 1):
+        try:
+            url = (
+                f"{SEARCH_URL}?search_category=mall"
+                f"&search_keyword={keyword}&x=0&y=0"
+            )
+            if page > 1:
+                url += f"&page={page}"
+
+            driver.get(url)
+            time.sleep(PAGE_LOAD_WAIT)
+            _dismiss_alert(driver)
+
+            soup = BeautifulSoup(driver.page_source, "lxml")
+            items = _parse_product_list(soup, source_tag=f"search:{keyword}")
+
+            new_count = 0
+            for item in items:
+                if item["product_id"] not in seen_ids:
+                    seen_ids.add(item["product_id"])
+                    item["search_keyword"] = keyword
+                    all_items.append(item)
+                    new_count += 1
+
+            logger.info(f"  [{keyword}] p{page}: {new_count}건 (누적 {len(all_items)})")
+
+            if new_count == 0:
+                break
+
+            time.sleep(random.uniform(2, 4))
+
+        except Exception as e:
+            logger.warning(f"  [{keyword}] p{page} 오류: {e}")
+            break
+
+    return all_items
+
+
+# ═══════════════════════════════════════════════
+# 카테고리 탐색
+# ═══════════════════════════════════════════════
+def browse_category(driver, category_id, category_name="", max_pages=3):
+    """단일 카테고리 페이지 크롤링"""
+    all_items = []
+    seen_ids = set()
+
+    for page in range(1, max_pages + 1):
+        try:
+            url = f"{CATEGORY_URL}?category={category_id}"
+            if page > 1:
+                url += f"&page={page}"
+
+            driver.get(url)
+            time.sleep(PAGE_LOAD_WAIT)
+            _dismiss_alert(driver)
+
+            soup = BeautifulSoup(driver.page_source, "lxml")
+            items = _parse_product_list(soup, source_tag=f"category:{category_name or category_id}")
+
+            new_count = 0
+            for item in items:
+                if item["product_id"] not in seen_ids:
+                    seen_ids.add(item["product_id"])
+                    item["category_id"] = category_id
+                    item["category_name"] = category_name
+                    item["kse_category"] = get_kse_category(category_id)
+                    item["category_jp"] = get_jp_name(category_id)
+                    all_items.append(item)
+                    new_count += 1
+
+            logger.info(f"  [카테고리:{category_name}] p{page}: {new_count}건 (누적 {len(all_items)})")
+
+            if new_count == 0:
+                break
+
+            time.sleep(random.uniform(2, 4))
+
+        except Exception as e:
+            logger.warning(f"  [카테고리:{category_name}] p{page} 오류: {e}")
+            break
+
+    return all_items
+
+
+def browse_all_beauty_categories(driver, max_pages_per_cat=2):
+    """뷰티 전체 중분류 카테고리 순회 크롤링 (우선순위 순)"""
+    all_items = []
+    seen_ids = set()
+
+    # 우선순위 카테고리 먼저
+    ordered = [str(c) for c in PRIORITY_CATEGORIES]
+    for mid_id in BEAUTY_MID_CATEGORIES:
+        if mid_id not in ordered:
+            ordered.append(mid_id)
+
+    for cat_id in ordered:
+        cat_data = _CAT_DATA["categories"].get(cat_id, {}) if _CAT_DATA else {}
+        cat_name = cat_data.get("name_kr", cat_id)
+
+        logger.info(f"─── 카테고리 탐색: {cat_name} (ID: {cat_id}) ───")
+        items = browse_category(driver, int(cat_id), cat_name, max_pages=max_pages_per_cat)
+
+        new_count = 0
+        for item in items:
+            pid = item.get("product_id", "")
+            if pid and pid not in seen_ids:
+                seen_ids.add(pid)
+                all_items.append(item)
+                new_count += 1
+
+        logger.info(f"  → {cat_name}: {new_count}건 신규 (누적 {len(all_items)})")
+        time.sleep(random.uniform(2, 4))
+
+    logger.info(f"═══ 전체 카테고리 탐색 완료: {len(all_items)}건 ═══")
+    return all_items
+
+
+# ═══════════════════════════════════════════════
+# 인기/추천/BEST 상품 탐색
+# ═══════════════════════════════════════════════
+def browse_featured_products(driver):
+    """인기/추천/BEST 정렬 페이지 탐색 → 가점 부여"""
+    featured_items = []
+    seen_ids = set()
+
+    featured_urls = [
+        (f"{CATEGORY_URL}?category=679&sort=popular", "beauty_popular", "인기", 12),
+        (f"{CATEGORY_URL}?category=679&sort=recommend", "beauty_recommend", "추천", 10),
+        (f"{CATEGORY_URL}?category=679&sort=best", "beauty_best", "best", 15),
+        (f"{CATEGORY_URL}?category=679&order=hit", "beauty_hit", "인기", 12),
+        (f"{CATEGORY_URL}?category=679&order=best", "beauty_best2", "best", 15),
+        (f"{CATEGORY_URL}?category=679&order=review", "beauty_review", "인기", 10),
+    ]
+
+    for url, tag, badge_name, badge_score in featured_urls:
         try:
             driver.get(url)
-            _dismiss_alert(driver, timeout=3.0)
-            WebDriverWait(driver, PAGE_LOAD_WAIT).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            time.sleep(1.5)
-            _dismiss_alert(driver, timeout=2.0)
+            time.sleep(PAGE_LOAD_WAIT)
+            _dismiss_alert(driver)
+
+            soup = BeautifulSoup(driver.page_source, "lxml")
+            items = _parse_product_list(soup, source_tag=tag)
+
+            for item in items:
+                pid = item.get("product_id", "")
+                if pid and pid not in seen_ids:
+                    seen_ids.add(pid)
+                    item["badge_bonus"] = max(item.get("badge_bonus", 0), badge_score)
+                    item.setdefault("badges", []).append(badge_name)
+                    featured_items.append(item)
+
+            logger.info(f"  [Featured:{tag}] {len(items)}건")
+            time.sleep(random.uniform(1, 3))
+
         except Exception as e:
-            logger.error(f"[search] 로드 실패 (keyword='{keyword}', page={page}): {e}")
-            break
+            logger.debug(f"  [Featured:{tag}] 접근 실패: {e}")
 
-        # 검색 결과 파싱 (카테고리 페이지와 동일한 구조)
-        page_items = _parse_category_page(driver, url)
-        if not page_items:
-            logger.debug(f"[search] keyword='{keyword}' page={page} → 결과 없음")
-            break
-
-        new_count = 0
-        for item in page_items:
-            if item["item_id"] not in seen_ids:
-                seen_ids.add(item["item_id"])
-                item["search_keyword"] = keyword
-                all_items.append(item)
-                new_count += 1
-
-        logger.info(f"[search] keyword='{keyword}' page={page} → 신규 {new_count}개 (누적 {len(all_items)}개)")
-        if new_count == 0:
-            break
-        time.sleep(1.0)
-
-    return all_items
+    logger.info(f"Featured 상품 총 {len(featured_items)}건 수집")
+    return featured_items
 
 
-def search_by_trend_keywords(driver, sourcing_keywords: list, max_per_keyword: int = 3) -> list:
+# ═══════════════════════════════════════════════
+# 트렌드 키워드 기반 일괄 검색
+# ═══════════════════════════════════════════════
+def search_by_trend_keywords(driver, sourcing_keywords=None, max_pages=2):
     """
-    PHASE B: 트렌드 키워드 리스트로 KJ9603 일괄 검색
-    Args:
-        driver: 로그인된 WebDriver
-        sourcing_keywords: trend_analyzer의 sourcing_keywords 리스트
-        max_per_keyword: 키워드당 최대 페이지 수
-    Returns:
-        list of dict (모든 검색 결과 통합, 중복 제거)
+    Phase A의 소싱 키워드 + 고정 키워드로 KJ9603 검색
+    sourcing_keywords: [{"keyword": "...", "keyword_kr": "...", ...}, ...]
     """
     all_items = []
-    seen_ids  = set()
+    seen_ids = set()
 
-    for sk in sourcing_keywords:
-        keyword_kr = sk.get("keyword_kr", "")
+    # 한국어 검색어 수집
+    kr_keywords = set()
 
-        # [TRANSLATE] 태그가 있으면 스킵 (번역 미완료)
-        if not keyword_kr or keyword_kr.startswith("[TRANSLATE]"):
-            logger.debug(f"[search_by_trend] 스킵: {sk.get('keyword_jp', '')} → {keyword_kr}")
-            continue
+    # 1) Phase A 소싱 키워드에서 한국어 추출
+    if sourcing_keywords:
+        for sk in sourcing_keywords:
+            kr = sk.get("keyword_kr", "")
+            if kr and kr != "[번역필요]":
+                kr_keywords.add(kr)
+            orig = sk.get("keyword", "")
+            if orig and re.match(r'[가-힣]', orig):
+                kr_keywords.add(orig)
 
-        logger.info(f"[search_by_trend] 검색: '{keyword_kr}' (JP: {sk.get('keyword_jp', '')})")
-        results = search_products(driver, keyword_kr, max_pages=max_per_keyword)
+    # 2) 고정 키워드 추가
+    kr_keywords.update(SEARCH_KEYWORDS_KR)
+    kr_keywords = sorted(list(kr_keywords))
+
+    logger.info(f"KJ9603 키워드 검색 시작: {len(kr_keywords)}개 키워드")
+
+    for i, kw in enumerate(kr_keywords):
+        logger.info(f"  [{i+1}/{len(kr_keywords)}] 검색: '{kw}'")
+        items = search_products(driver, kw, max_pages=max_pages)
 
         new_count = 0
-        for item in results:
-            if item["item_id"] not in seen_ids:
-                seen_ids.add(item["item_id"])
-                item["trend_keyword_jp"] = sk.get("keyword_jp", "")
-                item["trend_keyword_kr"] = keyword_kr
-                item["demand_rank"]      = sk.get("demand_rank", 999)
-                item["combined_score"]   = sk.get("combined_score", 0)
+        for item in items:
+            pid = item.get("product_id", "")
+            if pid and pid not in seen_ids:
+                seen_ids.add(pid)
                 all_items.append(item)
                 new_count += 1
 
-        logger.info(f"  → 신규 {new_count}개 (전체 누적 {len(all_items)}개)")
-        time.sleep(0.5)
+        logger.info(f"  → '{kw}': {len(items)}건 중 {new_count}건 신규")
+        time.sleep(random.uniform(1, 3))
 
-    logger.info(f"[search_by_trend] 총 {len(sourcing_keywords)}개 키워드 → {len(all_items)}개 상품 수집")
+    logger.info(f"키워드 검색 완료: {len(all_items)}건 (중복 제거)")
     return all_items
 
 
-# ══════════════════════════════════════════════════════════════
-# 5. 옵션 + 배송비 + 상세이미지 크롤링 (PHASE C)
-# ══════════════════════════════════════════════════════════════
-
-def fetch_item_detail(driver, item_url: str) -> dict:
+# ═══════════════════════════════════════════════
+# PHASE B 통합 실행 (카테고리 + 키워드 + Featured)
+# ═══════════════════════════════════════════════
+def run_phase_b(driver, sourcing_keywords=None, max_cat_pages=2, max_search_pages=2):
     """
-    상품 상세 페이지에서 옵션 + 배송비 + 상세이미지 추출
-
-    기존 fetch_item_options()를 확장:
-      - 옵션1/옵션2 파싱 (기존 동일)
-      - 배송비 파싱 (기존 동일)
-      - 상세 이미지 URL 수집 (신규)
-
-    Returns:
-        {
-            "has_option":     True/False,
-            "option1_name":   "색상",
-            "option1_values": ["빨강", "파랑"],
-            "option2_name":   "사이즈",
-            "option2_values": ["S", "M", "L"],
-            "shipping_fee":   4000,
-            "shipping_text":  "10 개당 4,000원",
-            "detail_images":  ["https://kmclubb2b.com/.../img1.jpg", ...],
-        }
+    PHASE B 전체 실행:
+    1) 뷰티 카테고리 전체 순회
+    2) 키워드 검색 (고정 + 트렌드)
+    3) Featured (인기/추천/BEST) 가점 병합
+    → 중복 제거된 전체 상품 리스트 반환
     """
-    result = {
-        "has_option":     False,
-        "option1_name":   "",
-        "option1_values": [],
-        "option2_name":   "",
-        "option2_values": [],
-        "shipping_fee":   KJ_DEFAULT_SHIPPING,
-        "shipping_text":  "",
-        "detail_images":  [],
-    }
+    all_items = {}  # product_id → item (중복 제거용)
 
-    try:
-        driver.get(item_url)
-        _dismiss_alert(driver, timeout=3.0)
-        WebDriverWait(driver, PAGE_LOAD_WAIT).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-        time.sleep(1.2)
+    # ── STEP 1: 카테고리 순회 ──
+    logger.info("═══ PHASE B STEP 1: 카테고리 순회 ═══")
+    cat_items = browse_all_beauty_categories(driver, max_pages_per_cat=max_cat_pages)
+    for item in cat_items:
+        pid = item.get("product_id", "")
+        if pid:
+            all_items[pid] = item
+    logger.info(f"카테고리 순회: {len(cat_items)}건 수집")
 
-        soup = BeautifulSoup(driver.page_source, "lxml")
+    # ── STEP 2: 키워드 검색 ──
+    logger.info("═══ PHASE B STEP 2: 키워드 검색 ═══")
+    search_items = search_by_trend_keywords(driver, sourcing_keywords, max_pages=max_search_pages)
+    new_from_search = 0
+    for item in search_items:
+        pid = item.get("product_id", "")
+        if pid and pid not in all_items:
+            all_items[pid] = item
+            new_from_search += 1
+        elif pid and pid in all_items:
+            # 기존 아이템에 검색 키워드 추가
+            existing = all_items[pid]
+            if item.get("search_keyword"):
+                existing.setdefault("search_keywords", []).append(item["search_keyword"])
+    logger.info(f"키워드 검색: {len(search_items)}건 중 {new_from_search}건 신규 추가")
 
-        # ── 배송비 파싱 ──────────────────────────────
-        try:
-            shipping_span = soup.select_one("span.shipping_note")
-            if shipping_span:
-                shipping_text = shipping_span.get_text(strip=True)
-                result["shipping_text"] = shipping_text
-                result["shipping_fee"]  = _parse_shipping_fee(shipping_text)
-            else:
-                price_table = soup.select_one("table.item_mall_price_wrap")
-                if price_table:
-                    for row in price_table.select("tr"):
-                        header_td = row.select_one("td.item_mall_price_header")
-                        if header_td and "배송" in header_td.get_text():
-                            content_td = row.select_one("td.item_mall_price_content")
-                            if content_td:
-                                shipping_text = content_td.get_text(strip=True)
-                                result["shipping_text"] = shipping_text
-                                result["shipping_fee"]  = _parse_shipping_fee(shipping_text)
-                            break
-        except Exception as e:
-            logger.warning(f"[배송비 파싱 오류] {item_url[-30:]}: {e}")
+    # ── STEP 3: Featured 가점 병합 ──
+    logger.info("═══ PHASE B STEP 3: Featured 가점 ═══")
+    featured_items = browse_featured_products(driver)
+    featured_count = 0
+    for feat in featured_items:
+        pid = feat.get("product_id", "")
+        if pid and pid in all_items:
+            # 기존 상품에 가점 병합
+            existing = all_items[pid]
+            existing["badge_bonus"] = max(
+                existing.get("badge_bonus", 0),
+                feat.get("badge_bonus", 0)
+            )
+            existing_badges = set(existing.get("badges", []))
+            existing_badges.update(feat.get("badges", []))
+            existing["badges"] = list(existing_badges)
+            featured_count += 1
+        elif pid and pid not in all_items:
+            all_items[pid] = feat
+    logger.info(f"Featured 가점 적용: {featured_count}건 병합")
 
-        # ── 상세 이미지 수집 (신규) ──────────────────
-        try:
-            detail_imgs = soup.select(DETAIL_IMAGE_SELECTOR)
-            for img in detail_imgs:
-                src = img.get("src", "") or img.get("data-src", "") or img.get("data-original", "")
-                if src and src.startswith("http"):
-                    result["detail_images"].append(src)
-            logger.info(f"[상세이미지] {len(result['detail_images'])}개 수집 ({item_url[-30:]})")
-        except Exception as e:
-            logger.warning(f"[상세이미지 오류] {item_url[-30:]}: {e}")
-
-        # ── 옵션1 ────────────────────────────────────
-        try:
-            sel1_el = driver.find_element(By.CSS_SELECTOR, "select#item_option1")
-            sel1    = Select(sel1_el)
-            opt1_values = [
-                o.text.strip()
-                for o in sel1.options
-                if o.text.strip() and "선택" not in o.text
-            ]
-
-            try:
-                label_el = driver.find_element(By.CSS_SELECTOR, "label[for='item_option1']")
-                opt1_name = label_el.text.strip()
-            except Exception:
-                opt1_name = sel1.options[0].text.strip().strip("=").strip() if sel1.options else "옵션1"
-
-            result["option1_name"]   = opt1_name
-            result["option1_values"] = opt1_values
-            result["has_option"]     = bool(opt1_values)
-        except Exception:
-            return result
-
-        # ── 옵션2 ────────────────────────────────────
-        if opt1_values:
-            try:
-                sel1 = Select(driver.find_element(By.CSS_SELECTOR, "select#item_option1"))
-                sel1.select_by_visible_text(opt1_values[0])
-                time.sleep(1.5)
-
-                sel2_el = driver.find_element(By.CSS_SELECTOR, "select#item_option2")
-                sel2    = Select(sel2_el)
-                opt2_values = [
-                    o.text.strip()
-                    for o in sel2.options
-                    if o.text.strip() and "선택" not in o.text
-                ]
-
-                try:
-                    label2_el = driver.find_element(By.CSS_SELECTOR, "label[for='item_option2']")
-                    opt2_name = label2_el.text.strip()
-                except Exception:
-                    opt2_name = sel2.options[0].text.strip().strip("=").strip() if sel2.options else "옵션2"
-
-                result["option2_name"]   = opt2_name
-                result["option2_values"] = opt2_values
-            except Exception:
-                pass
-
-    except Exception as e:
-        logger.error(f"[fetch_item_detail] 오류 ({item_url}): {e}")
-
+    result = list(all_items.values())
+    logger.info(f"═══ PHASE B 종합: {len(result)}건 (카테고리 {len(cat_items)} + 검색 신규 {new_from_search} + Featured 병합 {featured_count}) ═══")
     return result
 
 
-# ══════════════════════════════════════════════════════════════
-# 6. 네이버 API (큐텐 전용 키)
-# ══════════════════════════════════════════════════════════════
-
-def get_naver_lowest_price(keyword: str) -> int:
-    """네이버 쇼핑 최저가 검색"""
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        logger.warning("[naver_price] QOO10 전용 API 키 미설정")
-        return 0
-
-    url     = "https://openapi.naver.com/v1/search/shop.json"
-    headers = {
-        "X-Naver-Client-Id":     NAVER_CLIENT_ID,
-        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
-    }
-    params = {"query": keyword, "display": 5, "sort": "asc"}
-
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        if resp.status_code == 429:
-            logger.warning("[naver_price] Quota 초과 (429)")
-            return 0
-        if resp.status_code != 200:
-            return 0
-
-        items = resp.json().get("items", [])
-        prices = []
-        for item in items:
-            try:
-                prices.append(int(item.get("lprice", "0")))
-            except ValueError:
-                pass
-        return min(prices) if prices else 0
-
-    except Exception as e:
-        logger.error(f"[naver_price] 오류: {e}")
-        return 0
-
-
-def get_naver_search_count(keyword: str) -> int:
-    """네이버 쇼핑 검색 결과 수 (수요 지표)"""
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        return 0
-
-    url     = "https://openapi.naver.com/v1/search/shop.json"
-    headers = {
-        "X-Naver-Client-Id":     NAVER_CLIENT_ID,
-        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
-    }
-    params = {"query": keyword, "display": 1}
-
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        if resp.status_code == 429:
-            return -1
-        if resp.status_code != 200:
-            return 0
-        return int(resp.json().get("total", 0))
-    except Exception as e:
-        logger.error(f"[naver_search_count] 오류: {e}")
-        return 0
-
-
-# ══════════════════════════════════════════════════════════════
-# 7. PASS 1 필터링 (가격 범위 + 기본 조건)
-# ══════════════════════════════════════════════════════════════
-
-FILTER_MIN_SUPPLY_KRW = 5_000
-FILTER_MAX_SUPPLY_KRW = 300_000
-
-def pass1_filter(items: list) -> list:
-    """
-    PASS 1: 기본 필터링
-    - 공급가 범위 (5,000 ~ 300,000 KRW)
-    - 공급가 0원 제외
-    - 중복 제거 (item_id 기준)
-    Returns:
-        필터 통과한 상품 리스트
-    """
-    seen_ids = set()
-    filtered = []
+# ═══════════════════════════════════════════════
+# PASS 1 필터
+# ═══════════════════════════════════════════════
+def filter_pass1(items):
+    """PASS 1: 가격 범위 필터"""
+    passed = []
+    no_price = 0
+    too_cheap = 0
+    too_expensive = 0
 
     for item in items:
-        iid = item.get("item_id", "")
-        if iid in seen_ids:
+        price = item.get("supply_price", 0)
+
+        if price == 0:
+            no_price += 1
+            continue
+        if price < PASS1_MIN_PRICE:
+            too_cheap += 1
+            continue
+        if price > PASS1_MAX_PRICE:
+            too_expensive += 1
             continue
 
-        supply = item.get("supply_price", 0)
-        if supply < FILTER_MIN_SUPPLY_KRW or supply > FILTER_MAX_SUPPLY_KRW:
-            continue
+        passed.append(item)
 
-        seen_ids.add(iid)
-        filtered.append(item)
-
-    logger.info(f"[PASS1] {len(items)}건 → {len(filtered)}건 통과")
-    return filtered
+    logger.info(
+        f"PASS 1 결과: {len(items)}건 → {len(passed)}건 통과 "
+        f"(가격없음 {no_price}, 저가 {too_cheap}, 고가 {too_expensive})"
+    )
+    return passed
 
 
-# ══════════════════════════════════════════════════════════════
-# 직접 실행 (테스트)
-# ══════════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
-    if not KJ_ID or not KJ_PW:
-        print("ERROR: KJ9603_ID / KJ9603_PW 환경변수를 설정해주세요.")
-        exit(1)
-
-    print("crawler_kj.py 테스트 시작...")
-    driver = get_session()
+# ═══════════════════════════════════════════════
+# 상품 상세 페이지 크롤링
+# ═══════════════════════════════════════════════
+def fetch_item_detail(driver, item):
+    """상세 페이지: 공급가 재확인, 배송비, 이미지, 옵션"""
+    url = item.get("url", f"{ITEM_URL}?item={item['product_id']}")
 
     try:
-        # 테스트 1: 키워드 검색
-        results = search_products(driver, "ANUA", max_pages=1)
-        print(f"\n검색 결과 (ANUA): {len(results)}건")
-        for item in results[:3]:
-            print(f"  {item['name'][:40]} | 공급가: {item['supply_price']:,}원")
+        driver.get(url)
+        time.sleep(PAGE_LOAD_WAIT)
+        _dismiss_alert(driver)
 
-        # 테스트 2: 상세 페이지 크롤링
-        if results:
-            detail = fetch_item_detail(driver, results[0]["url"])
-            print(f"\n상세 정보:")
-            print(f"  배송비: {detail['shipping_fee']:,}원 ({detail['shipping_text']})")
-            print(f"  상세이미지: {len(detail['detail_images'])}개")
-            print(f"  옵션: {detail['has_option']}")
+        soup = BeautifulSoup(driver.page_source, "lxml")
 
-    finally:
-        close_driver(driver)
-        print("\n테스트 완료!")
+        # ── 공급가 재확인 ──
+        for sel in [".member_price", ".member4", ".item_price .price", ".sale_price"]:
+            tag = soup.select_one(sel)
+            if tag:
+                val = _price_text_to_int(tag.get_text())
+                if val > 0:
+                    item["supply_price"] = val
+                    break
+
+        # ── 소비자가 ──
+        for sel in [".consumer_price", ".cost4", ".org_price", "del.price", "s.price"]:
+            tag = soup.select_one(sel)
+            if tag:
+                val = _price_text_to_int(tag.get_text())
+                if val > 0:
+                    item["consumer_price"] = val
+                    break
+
+        # ── 배송비 ──
+        shipping_text = ""
+        for sel in ["span.shipping_note", ".delivery_info", ".shipping_fee",
+                     ".item_delivery", ".item_mall_price_wrap .shipping"]:
+            tag = soup.select_one(sel)
+            if tag:
+                shipping_text = tag.get_text(strip=True)
+                break
+        item["shipping_fee"] = _parse_shipping_fee(shipping_text)
+        item["shipping_text"] = shipping_text
+
+        # ── 상세 이미지 ──
+        detail_images = []
+        for img in soup.select(DETAIL_IMAGE_SELECTOR):
+            src = img.get("src", "") or img.get("data-src", "") or img.get("data-original", "")
+            if src:
+                if not src.startswith("http"):
+                    src = f"{BASE_URL}/{src.lstrip('/')}"
+                if src not in detail_images:
+                    detail_images.append(src)
+        item["detail_images"] = detail_images
+
+        # ── 옵션 정보 ──
+        options = []
+        for opt in soup.select("select.item_option option, select[name*='option'] option"):
+            opt_text = opt.get_text(strip=True)
+            opt_val = opt.get("value", "")
+            if opt_val and opt_text and opt_text not in ("선택", "- 선택 -", "선택하세요"):
+                options.append({"text": opt_text, "value": opt_val})
+        item["options"] = options
+
+        # ── 배지 재확인 ──
+        badges, bonus = _detect_badges(soup)
+        if bonus > item.get("badge_bonus", 0):
+            item["badge_bonus"] = bonus
+            existing_badges = set(item.get("badges", []))
+            existing_badges.update(badges)
+            item["badges"] = list(existing_badges)
+
+        logger.info(
+            f"  상세: {item['name'][:30]} | "
+            f"₩{item.get('supply_price', 0):,} | "
+            f"배송 {item.get('shipping_fee', 0):,}원 | "
+            f"이미지 {len(detail_images)}장 | "
+            f"옵션 {len(options)}개 | "
+            f"배지 {item.get('badges', [])}"
+        )
+
+    except Exception as e:
+        logger.warning(f"  상세 크롤링 실패 [{item.get('product_id')}]: {e}")
+
+    return item
+
+
+def fetch_items_detail_batch(driver, items, limit=150):
+    """상세 크롤링 배치 (상위 limit건)"""
+    targets = items[:limit]
+    logger.info(f"상세 크롤링 시작: {len(targets)}건 (전체 {len(items)}건 중)")
+
+    for i, item in enumerate(targets):
+        logger.info(f"  [{i+1}/{len(targets)}] {item.get('name', '')[:30]}")
+        fetch_item_detail(driver, item)
+        time.sleep(random.uniform(2, 4))
+
+    logger.info(f"상세 크롤링 완료: {len(targets)}건")
+    return targets
+
+
+# ═══════════════════════════════════════════════
+# Naver API 연동
+# ═══════════════════════════════════════════════
+def get_naver_lowest_price(product_name):
+    """네이버 쇼핑 최저가 조회"""
+    if not NAVER_CLIENT_ID:
+        return None
+
+    try:
+        headers = {
+            "X-Naver-Client-Id": NAVER_CLIENT_ID,
+            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+        }
+        params = {"query": product_name, "display": 5, "sort": "asc"}
+        resp = requests.get(
+            "https://openapi.naver.com/v1/search/shop.json",
+            headers=headers, params=params, timeout=5
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("items", [])
+            if items:
+                prices = [int(i["lprice"]) for i in items if i.get("lprice")]
+                return min(prices) if prices else None
+    except Exception as e:
+        logger.debug(f"  Naver API 오류: {e}")
+
+    return None
+
+
+def get_naver_search_count(product_name):
+    """네이버 쇼핑 검색 결과 수"""
+    if not NAVER_CLIENT_ID:
+        return 0
+
+    try:
+        headers = {
+            "X-Naver-Client-Id": NAVER_CLIENT_ID,
+            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+        }
+        params = {"query": product_name, "display": 1}
+        resp = requests.get(
+            "https://openapi.naver.com/v1/search/shop.json",
+            headers=headers, params=params, timeout=5
+        )
+        if resp.status_code == 200:
+            return resp.json().get("total", 0)
+    except Exception:
+        pass
+
+    return 0
+
+
+# ═══════════════════════════════════════════════
+# 메인 (테스트용)
+# ═══════════════════════════════════════════════
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
+
+    print("=" * 60)
+    print("KJ9603 크롤러 테스트 (v0.9)")
+    print("=" * 60)
+
+    # 카테고리 맵 확인
+    if _CAT_DATA:
+        cats = _CAT_DATA["categories"]
+        total_sub = sum(len(c.get("children", {})) for c in cats.values())
+        print(f"\n카테고리: {len(cats)}개 중분류, {total_sub}개 소분류")
+        print(f"우선순위: {PRIORITY_CATEGORIES}")
+    else:
+        print("\n카테고리 JSON 미로드 — 기본값 사용")
+
+    # KSE 매핑 테스트
+    test_ids = [682, 690, 710, 714, 748, 755]
+    print("\nKSE 카테고리 매핑 테스트:")
+    for tid in test_ids:
+        print(f"  {tid} ({get_kr_name(tid)}) → KSE: {get_kse_category(tid)} | JP: {get_jp_name(tid)}")
+
+    # 실제 크롤링 테스트 (로그인 필요)
+    if KJ_ID and KJ_PW:
+        driver = get_session()
+
+        # 카테고리 테스트 (스킨케어 1페이지)
+        print("\n── 카테고리 테스트: 스킨케어(680) ──")
+        items = browse_category(driver, 680, "스킨케어", max_pages=1)
+        print(f"결과: {len(items)}건")
+        for item in items[:5]:
+            print(f"  - {item.get('name', '')[:40]} | ₩{item.get('supply_price', 0):,} | {item.get('badges', [])}")
+
+        # 검색 테스트
+        print("\n── 검색 테스트: '토너' ──")
+        items = search_products(driver, "토너", max_pages=1)
+        print(f"결과: {len(items)}건")
+        for item in items[:5]:
+            print(f"  - {item.get('name', '')[:40]} | ₩{item.get('supply_price', 0):,}")
+
+        close_driver()
+    else:
+        print("\nKJ9603 로그인 정보 없음 — 크롤링 테스트 스킵")
+
+    print("\n테스트 완료!")
