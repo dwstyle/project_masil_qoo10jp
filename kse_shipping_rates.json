@@ -1,0 +1,53 @@
+{
+    "_description": "KSE 국제배송 요율표 (2026-03 기준) + 중분류별 무게 추정",
+    "_updated": "2026-03-04",
+    "_note": "FSC 유류할증료는 매월 16일 변동. light_rates/sagawa_rates는 JPY 단위.",
+
+    "light_rates": {
+        "0.10": 350,
+        "0.25": 380,
+        "0.50": 460,
+        "0.75": 500,
+        "1.00": 530
+    },
+
+    "sagawa_rates": {
+        "0.10": 657,
+        "0.25": 657,
+        "0.50": 693,
+        "0.75": 764,
+        "1.00": 835,
+        "1.25": 906,
+        "1.50": 977,
+        "1.75": 1048,
+        "2.00": 1119
+    },
+
+    "buffer_jpy": 100,
+
+    "category_weight_map": {
+        "립메이크업":       {"weight_kg": 0.10, "carrier": "light"},
+        "아이메이크업":     {"weight_kg": 0.10, "carrier": "light"},
+        "페이스메이크업":   {"weight_kg": 0.25, "carrier": "light"},
+        "베이스메이크업":   {"weight_kg": 0.25, "carrier": "light"},
+        "선케어":           {"weight_kg": 0.25, "carrier": "light"},
+        "스킨케어":         {"weight_kg": 0.50, "carrier": "light"},
+        "토너/스킨":        {"weight_kg": 0.50, "carrier": "light"},
+        "세럼/에센스":      {"weight_kg": 0.25, "carrier": "light"},
+        "크림":             {"weight_kg": 0.50, "carrier": "light"},
+        "로션/에멀전":      {"weight_kg": 0.50, "carrier": "light"},
+        "마스크팩":         {"weight_kg": 0.25, "carrier": "light"},
+        "클렌징":           {"weight_kg": 0.50, "carrier": "light"},
+        "헤어샴푸":         {"weight_kg": 0.75, "carrier": "sagawa"},
+        "헤어트리트먼트":   {"weight_kg": 0.75, "carrier": "sagawa"},
+        "헤어케어":         {"weight_kg": 0.75, "carrier": "sagawa"},
+        "바디워시":         {"weight_kg": 0.75, "carrier": "sagawa"},
+        "바디로션":         {"weight_kg": 0.75, "carrier": "sagawa"},
+        "바디케어":         {"weight_kg": 0.50, "carrier": "light"},
+        "향수":             {"weight_kg": 0.25, "carrier": "light"},
+        "네일":             {"weight_kg": 0.10, "carrier": "light"},
+        "뷰티툴":           {"weight_kg": 0.25, "carrier": "light"},
+        "세트/키트":        {"weight_kg": 1.00, "carrier": "sagawa"},
+        "default":          {"weight_kg": 0.50, "carrier": "light"}
+    }
+}
