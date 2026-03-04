@@ -89,11 +89,20 @@ def aggregate_rakuten_brands(rakuten_result):
         if item.get("rank"):
             bd["ranks"].append(item["rank"])
         if item.get("review_count"):
-            bd["reviews"].append(item["review_count"])
+            try:
+                bd["reviews"].append(int(item["review_count"]))
+            except (ValueError, TypeError):
+                pass
         if item.get("review_average"):
-            bd["ratings"].append(item["review_average"])
+            try:
+                bd["ratings"].append(float(item["review_average"]))
+            except (ValueError, TypeError):
+                pass
         if item.get("item_price"):
-            bd["prices"].append(item["item_price"])
+            try:
+                bd["prices"].append(int(item["item_price"]))
+            except (ValueError, TypeError):
+                pass
         if len(bd["sample_items"]) < 3:
             bd["sample_items"].append({
                 "name": item.get("item_name", "")[:60],
