@@ -1,0 +1,47 @@
+name: Qoo10 JP Beauty Sourcing Pipeline
+
+on:
+  schedule:
+    # 매일 한국시간 오전 6시 (UTC 21:00) 실행
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+    # 수동 실행 가능
+
+jobs:
+  sourcing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run sourcing pipeline
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          KJ9603_ID: ${{ secrets.KJ9603_ID }}
+          KJ9603_PW: ${{ secrets.KJ9603_PW }}
+          RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
+          RAKUTEN_ACCESS_KEY: ${{ secrets.RAKUTEN_ACCESS_KEY }}
+          QOO10_SHEET_ID: ${{ secrets.QOO10_SHEET_ID }}
+          QOO10_DRIVE_FOLDER_ID: ${{ secrets.QOO10_DRIVE_FOLDER_ID }}
+          QOO10_KSE_SHIPPING_CODE: ${{ secrets.QOO10_KSE_SHIPPING_CODE }}
+          NAVER_CLIENT_ID_QOO10: ${{ secrets.NAVER_CLIENT_ID_QOO10 }}
+          NAVER_CLIENT_SECRET_QOO10: ${{ secrets.NAVER_CLIENT_SECRET_QOO10 }}
+        run: |
+          python main_qoo10.py
