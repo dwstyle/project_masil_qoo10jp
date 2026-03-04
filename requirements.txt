@@ -1,0 +1,21 @@
+# Plan B Cabinet – Qoo10 Japan Beauty Sourcing
+# Python dependencies
+
+# 웹 크롤링
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+requests>=2.31.0
+
+# Google Cloud
+google-cloud-translate>=3.12.0
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+gspread>=5.12.0
+
+# Google Trends
+pytrends>=4.9.0
+
+# 엑셀 생성
+openpyxl>=3.1.0
