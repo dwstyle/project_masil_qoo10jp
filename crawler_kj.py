@@ -781,7 +781,7 @@ def fetch_item_detail(driver, item):
         soup = BeautifulSoup(driver.page_source, "lxml")
 
         # ── 공급가 재확인 ──
-        for sel in [".member_price", ".member4", ".item_price .price", ".sale_price"]:
+        for sel in ["p.category_mall_item_price_member4", ".member_price", ".member4"]:
             tag = soup.select_one(sel)
             if tag:
                 val = _price_text_to_int(tag.get_text())
@@ -790,7 +790,7 @@ def fetch_item_detail(driver, item):
                     break
 
         # ── 소비자가 ──
-        for sel in [".consumer_price", ".cost4", ".org_price", "del.price", "s.price"]:
+        for sel in ["p.category_mall_item_price_cost4", ".consumer_price", ".cost4"]:
             tag = soup.select_one(sel)
             if tag:
                 val = _price_text_to_int(tag.get_text())
@@ -800,8 +800,7 @@ def fetch_item_detail(driver, item):
 
         # ── 배송비 ──
         shipping_text = ""
-        for sel in ["span.shipping_note", ".delivery_info", ".shipping_fee",
-                     ".item_delivery", ".item_mall_price_wrap .shipping"]:
+        for sel in ["span.shipping_note", "table.item_mall_price_wrap td.item_mall_price_content"]:
             tag = soup.select_one(sel)
             if tag:
                 shipping_text = tag.get_text(strip=True)

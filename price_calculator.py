@@ -143,6 +143,12 @@ def calculate_price(supply_price_krw: int, kj_shipping_krw: int = 3500,
         }
     """
     # STEP 1: 총원가 (KRW)
+    if supply_price_krw <= 0:
+    return {
+        "supply_price_krw": 0, "is_profitable": False,
+        "error": "supply_price is 0", "margin_rate": 0,
+        "sell_price_jpy": 0, "margin_jpy": 0,
+    }
     total_cost_krw = supply_price_krw + kj_shipping_krw + EXPORT_FEE_KRW
 
     # STEP 2: 환산 (JPY)

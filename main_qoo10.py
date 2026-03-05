@@ -235,6 +235,10 @@ def phase_c(phase_b_result):
         logger.error(f"C1 상세 크롤링 오류: {e}")
         detailed_items = pass1_items[:PASS2_LIMIT]
 
+    # ── 0원 필터 추가 ──
+    detailed_items = [i for i in detailed_items if i.get("supply_price", 0) > 0]
+    logger.info(f"가격 파싱 성공: {len(detailed_items)}건") 
+
     # ── C2: 가격 계산 ──
     if calculate_prices_batch:
         try:
@@ -317,10 +321,14 @@ def phase_d(phase_a_result, phase_b_result, phase_c_result):
             logger.info("── PHASE D2: Google Sheets 업데이트 ──")
             update_all_sheets(
                 trend_data=phase_a_result,
-                sourcing_keywords=phase_a_result.get("combined", {}).get("sourcing_keywords", []) if phase_a_result.get("combined") else [],
-                kj_items=phase_b_result.get("pass1_items", []),
                 scored_items=phase_c_result.get("scored_items", []),
                 final_candidates=final_candidates,
+                run_summary={
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "phase_a": {"rakuten_scanned": phase_a_result.get("rakuten", {}).get("total_scanned", 0)},
+                    "phase_b": {"collected": phase_b_result.get("total_collected", 0)},
+                    "phase_c": {"candidates": len(final_candidates)},
+                },
             )
             logger.info("Sheets 업데이트 완료")
         except Exception as e:
