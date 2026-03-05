@@ -753,33 +753,18 @@ def run_phase_b(driver, sourcing_keywords=None, max_cat_pages=2, max_search_page
 # PASS 1 필터
 # ═══════════════════════════════════════════════
 def filter_pass1(items):
-    """PASS 1: 가격 범위 필터"""
+    """PASS 1: 기본 유효성 (가격은 상세 크롤링 후 price_calculator에서 판단)"""
     passed = []
-    no_price = 0
-    too_cheap = 0
-    too_expensive = 0
+    no_id = 0
 
     for item in items:
-        price = item.get("supply_price", 0)
-
-        if price == 0:
-            no_price += 1
+        if not item.get("product_id"):
+            no_id += 1
             continue
-        if price < PASS1_MIN_PRICE:
-            too_cheap += 1
-            continue
-        if price > PASS1_MAX_PRICE:
-            too_expensive += 1
-            continue
-
         passed.append(item)
 
-    logger.info(
-        f"PASS 1 결과: {len(items)}건 → {len(passed)}건 통과 "
-        f"(가격없음 {no_price}, 저가 {too_cheap}, 고가 {too_expensive})"
-    )
+    logger.info(f"PASS 1: {len(items)}건 → {len(passed)}건 통과 (ID없음 {no_id})")
     return passed
-
 
 # ═══════════════════════════════════════════════
 # 상품 상세 페이지 크롤링
