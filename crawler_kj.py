@@ -754,9 +754,16 @@ def fetch_item_detail(driver, item):
 
     try:
         driver.get(url)
-        time.sleep(PAGE_LOAD_WAIT)
         _dismiss_alert(driver)
-
+        
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "td.item_mall_price_content.item_mall_price_member"))
+            )
+        except:
+            logger.warning(f"  회원가 요소 대기 시간 초과: {item.get('product_id')}")
+        
+        time.sleep(2)
         soup = BeautifulSoup(driver.page_source, "lxml")
 
         # ── 공급가 재확인 ──
