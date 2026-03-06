@@ -427,29 +427,23 @@ def _extract_product_from_element(elem, source_tag):
     item["name"] = name[:200] if name else f"상품_{item['product_id']}"
 
     # ── 공급가 (회원가) ──
-    price_selectors = [
-        ".member_price", ".item_price", ".price", ".sale_price",
-        ".goods_price", "span.price", "strong.price",
-        ".cost4", ".member4", ".item_gallery_price",
-        ".mall_item_price",
-    ]
-    for ps in price_selectors:
-        tag = elem.select_one(ps)
-        if tag:
-            val = _price_text_to_int(tag.get_text())
-            if val > 0:
-                item["supply_price"] = val
-                break
+    tag = soup.select_one("td.item_mall_price_content.item_mall_price_member")
+    if tag:
+        val = _price_text_to_int(tag.get_text())
+        if val > 0:
+            item["supply_price"] = val
 
-    # ── 소비자가 ──
-    consumer_selectors = [".consumer_price", ".org_price", ".before_price", ".cost", "del", "s"]
-    for cs in consumer_selectors:
-        tag = elem.select_one(cs)
-        if tag:
-            val = _price_text_to_int(tag.get_text())
-            if val > 0:
-                item["consumer_price"] = val
-                break
+    # ── 소비자가 (상품 공급가 표기) ──
+    tag = soup.select_one("td.item_mall_price_content.item_mall_price_cost")
+    if tag:
+        val = _price_text_to_int(tag.get_text())
+        if val > 0:
+            item["consumer_price"] = val
+
+    # ── 폴백: supply_price 0이면 consumer_price 사용 ──
+    if item.get("supply_price", 0) <= 0 and item.get("consumer_price", 0) > 0:
+        item["supply_price"] = item["consumer_price"]
+        logger.warning(f"  회원가 없음 → 소비자가 폴백: ₩{item['supply_price']:,}")
 
     # ── 이미지 ──
     img_tag = elem.find("img")
