@@ -756,33 +756,51 @@ def fetch_item_detail(driver, item):
         driver.get(url)
         _dismiss_alert(driver)
         
+        # 로그인 상태 확인 — 로그인 페이지로 리다이렉트됐는지 체크
+        if "login" in driver.current_url or "member" in driver.current_url:
+            logger.warning(f"  세션 만료 감지 → 재로그인")
+            _login(driver)
+            driver.get(url)
+            _dismiss_alert(driver)
+        
         try:
             WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "td.item_mall_price_content.item_mall_price_member"))
             )
         except:
-            logger.warning(f"  회원가 요소 대기 시간 초과: {item.get('product_id')}")
+            # 폴백: 페이지 소스에서 data-price 속성으로 직접 추출
+            pass
         
         time.sleep(2)
         soup = BeautifulSoup(driver.page_source, "lxml")
 
-        # ── 공급가 재확인 ──
-        for sel in ["p.category_mall_item_price_member4", ".member_price", ".member4"]:
-            tag = soup.select_one(sel)
-            if tag:
-                val = _price_text_to_int(tag.get_text())
+        # ── 공급가 (회원가) ──
+        tag = soup.select_one("td.item_mall_price_content.item_mall_price_member")
+        if tag:
+            val = _price_text_to_int(tag.get_text())
+            if val > 0:
+                item["supply_price"] = val
+
+        # ── 폴백: data-price 속성 ──
+        if item.get("supply_price", 0) <= 0:
+            input_tag = soup.select_one("input.item_mall_volume[data-price]")
+            if input_tag:
+                val = int(input_tag.get("data-price", "0"))
                 if val > 0:
                     item["supply_price"] = val
-                    break
+                    logger.info(f"  data-price 폴백: ₩{val:,}")
 
         # ── 소비자가 ──
-        for sel in ["p.category_mall_item_price_cost4", ".consumer_price", ".cost4"]:
-            tag = soup.select_one(sel)
-            if tag:
-                val = _price_text_to_int(tag.get_text())
-                if val > 0:
-                    item["consumer_price"] = val
-                    break
+        tag = soup.select_one("td.item_mall_price_content.item_mall_price_cost")
+        if tag:
+            val = _price_text_to_int(tag.get_text())
+            if val > 0:
+                item["consumer_price"] = val
+
+        # ── 폴백: supply_price 0이면 consumer_price 사용 ──
+        if item.get("supply_price", 0) <= 0 and item.get("consumer_price", 0) > 0:
+            item["supply_price"] = item["consumer_price"]
+            logger.warning(f"  회원가 없음 → 소비자가 폴백: ₩{item['supply_price']:,}")
 
         # ── 배송비 ──
         shipping_text = ""
