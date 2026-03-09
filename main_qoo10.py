@@ -213,7 +213,7 @@ def phase_b(phase_a_result):
 # ═══════════════════════════════════════════════
 # PHASE C: 가격·경쟁·스코어링
 # ═══════════════════════════════════════════════
-def phase_c(phase_b_result):
+def phase_c(phase_b_result, phase_a_result=None):
     """PHASE C: 상세 크롤링 + 가격 계산 + 경쟁가 + 스코어링"""
     logger.info("=" * 60)
     logger.info("PHASE C: 가격·경쟁·스코어링 시작")
@@ -237,7 +237,7 @@ def phase_c(phase_b_result):
 
     # ── 0원 필터 추가 ──
     detailed_items = [i for i in detailed_items if i.get("supply_price", 0) > 0]
-    logger.info(f"가격 파싱 성공: {len(detailed_items)}건") 
+    logger.info(f"가격 파싱 성공: {len(detailed_items)}건")
 
     # ── C2: 가격 계산 ──
     if calculate_prices_batch:
@@ -255,7 +255,6 @@ def phase_c(phase_b_result):
     if get_competitor_prices_batch:
         try:
             logger.info("── PHASE C3: 경쟁가 비교 ──")
-            # 수익성 있는 상품만 경쟁가 조회 (API 비용 절약)
             target_items = [i for i in detailed_items if i.get("is_profitable")]
             if target_items:
                 get_competitor_prices_batch(target_items)
@@ -273,12 +272,12 @@ def phase_c(phase_b_result):
     if calculate_scores_batch and get_final_candidates:
         try:
             logger.info("── PHASE C4: 스코어링 ──")
-            
+
             # 트렌드 데이터 → 개별 아이템에 매핑
             sourcing_keywords = []
             if phase_a_result and phase_a_result.get("combined"):
                 sourcing_keywords = phase_a_result["combined"].get("sourcing_keywords", [])
-            
+
             if sourcing_keywords:
                 trend_map = {}
                 for sk in sourcing_keywords:
@@ -290,22 +289,22 @@ def phase_c(phase_b_result):
                         trend_map[kr.lower()] = {"combined_score": score, "demand_rank": rank}
                     if jp:
                         trend_map[jp.lower()] = {"combined_score": score, "demand_rank": rank}
-                
+
                 matched = 0
                 for item in detailed_items:
                     item_name = item.get("name", "").lower()
                     item_keywords = item.get("search_keywords", [])
                     item_keyword = item.get("search_keyword", "")
-                    
+
                     best_score = 0
                     best_rank = 999
-                    
+
                     for kw, tdata in trend_map.items():
                         if kw in item_name:
                             if tdata["combined_score"] > best_score:
                                 best_score = tdata["combined_score"]
                                 best_rank = tdata["demand_rank"]
-                    
+
                     for kw in ([item_keyword] + list(item_keywords)):
                         kw_lower = kw.lower() if kw else ""
                         if kw_lower in trend_map:
@@ -313,14 +312,16 @@ def phase_c(phase_b_result):
                             if tdata["combined_score"] > best_score:
                                 best_score = tdata["combined_score"]
                                 best_rank = tdata["demand_rank"]
-                    
+
                     if best_score > 0:
                         item["combined_score"] = best_score
                         item["demand_rank"] = best_rank
                         matched += 1
-                
+
                 logger.info(f"트렌드 매핑: {matched}/{len(detailed_items)}건 매칭")
-            
+            else:
+                logger.warning("트렌드 매핑 스킵: 소싱 키워드 0건")
+
             scored_items = calculate_scores_batch(detailed_items)
             final_candidates = get_final_candidates(scored_items)
             logger.info(f"스코어링 완료: {len(scored_items)}건, 최종 후보: {len(final_candidates)}건")
@@ -519,7 +520,7 @@ def main():
         phase_b_result = phase_b(phase_a_result)
 
         # ── PHASE C ──
-        phase_c_result = phase_c(phase_b_result)
+        phase_c_result = phase_c(phase_b_result, phase_a_result=phase_a_result)
 
         # ── PHASE D ──
         phase_d_result = phase_d(phase_a_result, phase_b_result, phase_c_result)
