@@ -24,7 +24,7 @@ WEIGHT_DEMAND   = 25
 WEIGHT_PLATFORM = 15
 
 # ── 필터 기준 ─────────────────────────────────────────────────
-FINAL_SCORE_THRESHOLD   = 70
+FINAL_SCORE_THRESHOLD   = 55
 MIN_MARGIN_RATE         = 0.20
 PRICE_RATIO_MAX         = 1.10   # 경쟁가 대비 110% 이하
 
@@ -229,7 +229,8 @@ def calculate_score(item: dict) -> dict:
     demand_score   = _score_demand(item)
     platform_score = _score_platform(item)
 
-    final_score = round(price_score + trend_score + demand_score + platform_score, 1)
+    badge_bonus = item.get("badge_bonus", 0)
+    final_score = round(price_score + trend_score + demand_score + platform_score + badge_bonus, 1)
 
     # 등급 부여
     if final_score >= 85:

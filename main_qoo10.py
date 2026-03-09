@@ -151,8 +151,8 @@ def phase_a():
             combined_result = run_trend_analysis_combined(rakuten_result, google_result)
             summary = combined_result.get("summary", {})
             logger.info(
-                f"통합 분석 완료: 소싱 키워드 {summary.get('sourcing_keywords_count', 0)}개, "
-                f"브랜드 {summary.get('brand_count', 0)}개"
+                f"통합 분석 완료: 소싱 키워드 {summary.get('final_sourcing_keywords', 0)}개, "
+                f"브랜드 {summary.get('total_rakuten_brands', 0)}개"
             )
         except Exception as e:
             logger.error(f"PHASE A3 오류: {e}")
@@ -273,6 +273,54 @@ def phase_c(phase_b_result):
     if calculate_scores_batch and get_final_candidates:
         try:
             logger.info("── PHASE C4: 스코어링 ──")
+            
+            # 트렌드 데이터 → 개별 아이템에 매핑
+            sourcing_keywords = []
+            if phase_a_result and phase_a_result.get("combined"):
+                sourcing_keywords = phase_a_result["combined"].get("sourcing_keywords", [])
+            
+            if sourcing_keywords:
+                trend_map = {}
+                for sk in sourcing_keywords:
+                    kr = sk.get("keyword_kr", "")
+                    jp = sk.get("keyword_jp", "")
+                    score = sk.get("combined_score", 0)
+                    rank = sk.get("demand_rank", 999)
+                    if kr:
+                        trend_map[kr.lower()] = {"combined_score": score, "demand_rank": rank}
+                    if jp:
+                        trend_map[jp.lower()] = {"combined_score": score, "demand_rank": rank}
+                
+                matched = 0
+                for item in detailed_items:
+                    item_name = item.get("name", "").lower()
+                    item_keywords = item.get("search_keywords", [])
+                    item_keyword = item.get("search_keyword", "")
+                    
+                    best_score = 0
+                    best_rank = 999
+                    
+                    for kw, tdata in trend_map.items():
+                        if kw in item_name:
+                            if tdata["combined_score"] > best_score:
+                                best_score = tdata["combined_score"]
+                                best_rank = tdata["demand_rank"]
+                    
+                    for kw in ([item_keyword] + list(item_keywords)):
+                        kw_lower = kw.lower() if kw else ""
+                        if kw_lower in trend_map:
+                            tdata = trend_map[kw_lower]
+                            if tdata["combined_score"] > best_score:
+                                best_score = tdata["combined_score"]
+                                best_rank = tdata["demand_rank"]
+                    
+                    if best_score > 0:
+                        item["combined_score"] = best_score
+                        item["demand_rank"] = best_rank
+                        matched += 1
+                
+                logger.info(f"트렌드 매핑: {matched}/{len(detailed_items)}건 매칭")
+            
             scored_items = calculate_scores_batch(detailed_items)
             final_candidates = get_final_candidates(scored_items)
             logger.info(f"스코어링 완료: {len(scored_items)}건, 최종 후보: {len(final_candidates)}건")
