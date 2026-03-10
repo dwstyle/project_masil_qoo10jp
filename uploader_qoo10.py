@@ -195,8 +195,23 @@ def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields="id, webViewLink"
+            fields="id, webViewLink",
+            supportsAllDrives=True,
         ).execute()
+
+        # 소유자에게 권한 부여
+        try:
+            service.permissions().create(
+                fileId=file.get("id"),
+                body={
+                    "type": "user",
+                    "role": "writer",
+                    "emailAddress": "dwstyle80@gmail.com",
+                },
+                transferOwnership=False,
+            ).execute()
+        except Exception as perm_err:
+            logger.warning(f"[Drive] 권한 부여 실패 (무시): {perm_err}")
 
         file_id = file.get("id", "")
         file_url = file.get("webViewLink", f"https://drive.google.com/file/d/{file_id}/view")
