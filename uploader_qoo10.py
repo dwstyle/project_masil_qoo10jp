@@ -460,19 +460,14 @@ def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
                 fileId=file.get("id"),
                 body={
                     "type": "user",
-                    "role": "writer",
-                    "emailAddress": "dwstyle80@gmail.com",
+                    "role": "owner",
+                    "emailAddress": "soccercamp.beta@gmail.com",
                 },
-                transferOwnership=False,
+                transferOwnership=True,
+                supportsAllDrives=True,
             ).execute()
         except Exception as perm_err:
-            logger.warning(f"[Drive] 권한 부여 실패 (무시): {perm_err}")
-
-        file_id = file.get("id", "")
-        file_url = file.get("webViewLink", f"https://drive.google.com/file/d/{file_id}/view")
-
-        logger.info(f"[Drive] 업로드 완료: {filename} → {file_url}")
-        return file_url
+            logger.warning(f"[Drive] 소유권 이전 실패 (무시): {perm_err}")
 
     except ImportError:
         logger.error("google-api-python-client 미설치 – pip install google-api-python-client")
