@@ -1,10 +1,11 @@
 """
 uploader_qoo10.py – Qoo10 J·QSM 업로드용 엑셀 생성 & Drive 업로드 모듈
 Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.7
+Version: 0.8
 
 최종 통과 상품을 Qoo10 J·QSM 대량등록 엑셀 양식으로 변환하고
 Google Drive에 업로드합니다.
+Drive 업로드 실패 시 artifacts/ 폴더에 로컬 저장 (GitHub Artifact 다운로드용)
 """
 
 import os
@@ -397,25 +398,38 @@ def generate_qoo10_excel(items: list) -> BytesIO:
 
 
 # ══════════════════════════════════════════════════════════════
-# 2. Google Drive 업로드
+# 2. Google Drive 업로드 (★ v0.8 수정: 로컬 백업 + return 버그 수정)
 # ══════════════════════════════════════════════════════════════
 
 def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
     """
     엑셀 파일을 Google Drive에 업로드
+    실패 시 artifacts/ 폴더에 로컬 저장 (GitHub Artifact 다운로드용)
+
     Args:
         file_bytes: BytesIO 객체
         filename: 파일명 (None이면 자동 생성)
     Returns:
-        업로드된 파일 URL (실패 시 빈 문자열)
+        업로드된 파일 URL / "LOCAL:경로" / 빈 문자열
     """
-    if not QOO10_DRIVE_FOLDER_ID:
-        logger.error("QOO10_DRIVE_FOLDER_ID 미설정")
-        return ""
-
     if filename is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"qoo10_upload_{timestamp}.xlsx"
+
+    # ★ ① 항상 로컬 백업 먼저 (artifacts/)
+    artifact_dir = os.path.join(os.getcwd(), "artifacts")
+    os.makedirs(artifact_dir, exist_ok=True)
+    local_path = os.path.join(artifact_dir, filename)
+
+    file_bytes.seek(0)
+    with open(local_path, "wb") as f:
+        f.write(file_bytes.read())
+    logger.info(f"[로컬] artifacts 백업 완료: {local_path}")
+
+    # ★ ② Drive 업로드 시도
+    if not QOO10_DRIVE_FOLDER_ID:
+        logger.warning("QOO10_DRIVE_FOLDER_ID 미설정 → 로컬 백업만 사용")
+        return f"LOCAL:{local_path}"
 
     try:
         from googleapiclient.discovery import build
@@ -424,8 +438,8 @@ def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
 
         sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
         if not sa_json:
-            logger.error("GOOGLE_SERVICE_ACCOUNT_JSON 미설정")
-            return ""
+            logger.warning("GOOGLE_SERVICE_ACCOUNT_JSON 미설정 → 로컬 백업만 사용")
+            return f"LOCAL:{local_path}"
 
         sa_info = json.loads(sa_json)
         credentials = service_account.Credentials.from_service_account_info(
@@ -441,6 +455,9 @@ def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
             "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }
 
+        # ★ BytesIO 위치 리셋 (로컬 저장 후 포인터가 끝에 있으므로)
+        file_bytes.seek(0)
+
         media = MediaIoBaseUpload(
             file_bytes,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -454,10 +471,14 @@ def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
             supportsAllDrives=True,
         ).execute()
 
-        # 소유자에게 권한 부여
+        web_link = file.get("webViewLink", "")
+        file_id = file.get("id", "")
+        logger.info(f"[Drive] 업로드 성공: {web_link}")
+
+        # 소유권 이전 시도
         try:
             service.permissions().create(
-                fileId=file.get("id"),
+                fileId=file_id,
                 body={
                     "type": "user",
                     "role": "owner",
@@ -466,33 +487,28 @@ def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
                 transferOwnership=True,
                 supportsAllDrives=True,
             ).execute()
+            logger.info("[Drive] 소유권 이전 완료")
         except Exception as perm_err:
             logger.warning(f"[Drive] 소유권 이전 실패 (무시): {perm_err}")
 
+        return web_link  # ★ 기존 v0.7에서 빠져있던 return 추가
+
     except ImportError:
-        logger.error("google-api-python-client 미설치 – pip install google-api-python-client")
-        return ""
+        logger.warning("google-api-python-client 미설치 → 로컬 백업만 사용")
+        return f"LOCAL:{local_path}"
     except Exception as e:
-        logger.error(f"[Drive] 업로드 실패: {e}")
-        return ""
+        # ★ error → warning 으로 변경, 파이프라인 중단 방지
+        logger.warning(f"[Drive] 업로드 실패 (로컬 백업 사용): {e}")
+        return f"LOCAL:{local_path}"
 
 
 # ══════════════════════════════════════════════════════════════
-# 3. 통합 실행 (엑셀 생성 + 업로드)
+# 3. 통합 실행 (엑셀 생성 + 업로드)  ★ v0.8 수정
 # ══════════════════════════════════════════════════════════════
 
 def generate_and_upload(items: list) -> dict:
     """
-    최종 통과 상품 → 엑셀 생성 → Drive 업로드
-    Args:
-        items: 최종 통과 상품 리스트
-    Returns:
-        {
-            "item_count": 50,
-            "filename": "qoo10_upload_20260304_143000.xlsx",
-            "drive_url": "https://drive.google.com/...",
-            "success": True,
-        }
+    최종 통과 상품 → 엑셀 생성 → Drive 업로드 (실패 시 로컬 저장)
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"qoo10_upload_{timestamp}.xlsx"
@@ -502,20 +518,27 @@ def generate_and_upload(items: list) -> dict:
     if excel_bytes is None:
         return {"item_count": 0, "filename": "", "drive_url": "", "success": False}
 
-    # Drive 업로드
+    # Drive 업로드 (실패 시 로컬 저장)
     drive_url = upload_to_drive(excel_bytes, filename)
+
+    # ★ LOCAL: 접두어면 Drive 실패했지만 로컬 백업은 성공
+    is_local = drive_url.startswith("LOCAL:") if drive_url else False
 
     result = {
         "item_count": len(items),
         "filename":   filename,
         "drive_url":  drive_url,
-        "success":    bool(drive_url),
+        "success":    bool(drive_url),   # ★ 로컬 저장도 성공으로 처리
+        "is_local":   is_local,
     }
 
-    if drive_url:
-        logger.info(f"[업로드] 성공: {len(items)}건 → {filename}")
+    if drive_url and not is_local:
+        logger.info(f"[업로드] Drive 성공: {len(items)}건 → {drive_url}")
+    elif is_local:
+        logger.info(f"[업로드] 로컬 저장: {len(items)}건 → {drive_url}")
+        logger.info("[업로드] GitHub Actions Artifacts 탭에서 다운로드 가능")
     else:
-        logger.error(f"[업로드] 실패: Drive 업로드 에러")
+        logger.error("[업로드] 실패: 엑셀 생성 또는 저장 에러")
 
     return result
 
