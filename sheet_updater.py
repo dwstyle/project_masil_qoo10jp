@@ -1,18 +1,27 @@
 """
 sheet_updater.py – Google Sheets 업데이트 모듈
 Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.7
+Version: 0.8
+
+★ v0.7 → v0.8 변경사항:
+  1. "큐텐업로드" 탭 → 공식 48컬럼(A~AV) 구조로 교체
+  2. _ensure_sheet_rows() 추가 — grid limit 400 에러 방지
+  3. _ensure_sheet_cols() 추가 — 48컬럼 수용
+  4. uploader_qoo10.py의 매핑 함수를 import해서 사용 (중복 제거)
+  5. 소싱후보/트렌드분석/운영정보 탭 기존 로직 유지
 
 시트 탭 구조:
-  1. 트렌드분석 – PHASE A 결과 (라쿠텐·구글 트렌드)
-  2. 소싱후보  – PHASE B+C 결과 (상품·가격·경쟁가·점수)
-  3. 큐텐업로드 – 최종 통과 상품 (업로드 대상)
+  1. 트렌드분석   – PHASE A 결과 (라쿠텐·구글 트렌드)
+  2. 소싱후보     – PHASE B+C 결과 (상품·가격·경쟁가·점수)
+  3. 큐텐업로드   – ★ 공식 48컬럼 양식 (업로드 대상)
   4. 카테고리매핑 – KJ9603 ↔ Qoo10 카테고리
-  5. 운영정보  – 실행 로그, 환율, 배송비 변동 기록
+  5. 운영정보     – 실행 로그, 환율, 배송비 변동 기록
 """
 
 import os
 import json
+import math
+import re
 import logging
 from datetime import datetime
 
@@ -20,7 +29,76 @@ logger = logging.getLogger(__name__)
 
 # ── 설정 ──────────────────────────────────────────────────────
 QOO10_SHEET_ID = os.environ.get("QOO10_SHEET_ID", "")
+QOO10_KSE_SHIPPING_CODE = os.environ.get("QOO10_KSE_SHIPPING_CODE", "813137")
 
+
+# ══════════════════════════════════════════════════════════════
+# uploader_qoo10.py에서 매핑 함수 import (★ v0.8)
+# import 실패 시 로컬 폴백 함수 사용
+# ══════════════════════════════════════════════════════════════
+
+try:
+    from uploader_qoo10 import (
+        _match_qoo10_category,
+        _match_brand_code,
+        _get_item_weight,
+        _truncate_item_name,
+        _extract_search_keywords,
+        OFFICIAL_HEADERS,
+        CATEGORY_JP_NAME,
+    )
+    logger.info("[시트] uploader_qoo10 매핑 함수 import 성공")
+    _USE_UPLOADER_IMPORT = True
+except ImportError:
+    logger.warning("[시트] uploader_qoo10 import 실패 → 로컬 폴백 사용")
+    _USE_UPLOADER_IMPORT = False
+
+    # ── 폴백: 최소한의 매핑 (import 실패 시에만 사용) ─────────
+    OFFICIAL_HEADERS = [
+        'item_number', 'seller_unique_item_id', 'category_number',
+        'brand_number', 'item_name', 'item_promotion_name',
+        'item_status_Y/N/D', 'end_date', 'price_yen', 'retail_price_yen',
+        'quantity', 'option_info', 'additional_option_info',
+        'additional_option_text', 'image_main_url', 'image_other_url',
+        'video_url', 'image_option_info', 'image_additional_option_info',
+        'header_html', 'footer_html', 'item_description',
+        'Shipping_number', 'option_number', 'available_shipping_date',
+        'desired_shipping_date', 'search_keyword', 'item_condition_type',
+        'origin_type', 'origin_region_id', 'origin_country_id',
+        'origin_others', 'medication_type', 'item_weight',
+        'item_material', 'model_name', 'external_product_type',
+        'external_product_id', 'manufacture_date', 'expiration_date_type',
+        'expiration_date_MFD', 'expiration_date_PAO', 'expiration_date_EXP',
+        'under18s_display_Y/N', 'A/S_info', 'buy_limit_type',
+        'buy_limit_date', 'buy_limit_qty',
+    ]
+
+    def _match_qoo10_category(item):
+        return "320001621"
+
+    def _match_brand_code(item):
+        return ""
+
+    def _get_item_weight(category_code):
+        return 0.50
+
+    def _truncate_item_name(name, max_len=50):
+        if not name:
+            return ""
+        cleaned = re.sub(r'\[.*?(?:특가|한정|세일|할인|이벤트|봄맞이).*?\]\s*', '', name)
+        return cleaned[:max_len]
+
+    def _extract_search_keywords(item, category_code):
+        brand = (item.get("brand", "") or "").strip()
+        parts = [brand, "韓国コスメ", "韓国", "Korean Beauty"]
+        return ",".join([p for p in parts if p][:10])
+
+    CATEGORY_JP_NAME = {}
+
+
+# ══════════════════════════════════════════════════════════════
+# 공통 유틸리티
+# ══════════════════════════════════════════════════════════════
 
 def _get_sheets_client():
     """Google Sheets API 클라이언트 생성"""
@@ -68,8 +146,129 @@ def _get_or_create_worksheet(spreadsheet, title, rows=1000, cols=30):
     try:
         return spreadsheet.worksheet(title)
     except Exception:
-        logger.info(f"워크시트 '{title}' 생성")
+        logger.info(f"워크시트 '{title}' 생성 (rows={rows}, cols={cols})")
         return spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
+
+
+def _ensure_sheet_rows(ws, needed_rows):
+    """
+    ★ v0.8 신규: 시트 행 수가 부족하면 자동 확장
+    → '소싱후보'!A2 exceeds grid limits 에러 방지
+    """
+    try:
+        current_rows = ws.row_count
+        if current_rows < needed_rows:
+            expand_to = needed_rows + 500
+            ws.resize(rows=expand_to)
+            logger.info(f"[시트] '{ws.title}' 행 확장: {current_rows} → {expand_to}")
+    except Exception as e:
+        logger.warning(f"[시트] '{ws.title}' 행 확장 실패: {e}")
+
+
+def _ensure_sheet_cols(ws, needed_cols):
+    """
+    ★ v0.8 신규: 시트 컬럼 수가 부족하면 자동 확장
+    → 48컬럼 양식 수용
+    """
+    try:
+        current_cols = ws.col_count
+        if current_cols < needed_cols:
+            expand_to = needed_cols + 5
+            ws.resize(cols=expand_to)
+            logger.info(f"[시트] '{ws.title}' 컬럼 확장: {current_cols} → {expand_to}")
+    except Exception as e:
+        logger.warning(f"[시트] '{ws.title}' 컬럼 확장 실패: {e}")
+
+
+# ══════════════════════════════════════════════════════════════
+# 큐텐업로드 전용: 48컬럼 행 생성 (★ v0.8)
+# ══════════════════════════════════════════════════════════════
+
+def _build_upload_row(item):
+    """단일 상품 dict → 공식 양식 48컬럼 리스트"""
+    cat_code = _match_qoo10_category(item)
+    brand_code = _match_brand_code(item)
+    price = int(item.get('sell_price_jpy', 0) or item.get('price_jpy', 0) or 0)
+    retail_price = math.ceil(price * 1.3) if price > 0 else 0
+    weight = _get_item_weight(cat_code)
+    name_jp = item.get('name_jp', '') or item.get('name', '') or ''
+    item_name = _truncate_item_name(name_jp)
+
+    # 이미지
+    images = item.get('detail_images', []) or item.get('images', []) or []
+    thumbnail = item.get('thumbnail', '') or item.get('image_url', '')
+    main_image = thumbnail or (images[0] if images else '')
+    other_images = '||'.join(images[:20]) if images else ''
+
+    # 상세 HTML
+    detail_html = item.get('detail_html', '') or ''
+
+    # 판매자 상품코드
+    seller_id = item.get('item_id', '') or item.get('product_id', '') or ''
+
+    # 검색어
+    search_kw = _extract_search_keywords(item, cat_code)
+
+    # 옵션
+    detail = item.get('detail_info', {})
+    opt_name = detail.get('option1_name', '')
+    opt_values = detail.get('option1_values', [])
+    option_str = ''
+    if opt_name and opt_values:
+        option_parts = [f"{v}^{price}^99^0^0" for v in opt_values]
+        option_str = f"{opt_name}:#{'$$'.join(option_parts)}"
+
+    row = [
+        '',                              # A  item_number (신규→공란)
+        f'KJ{seller_id}',               # B  seller_unique_item_id
+        str(cat_code),                   # C  category_number
+        str(brand_code),                 # D  brand_number
+        item_name,                       # E  item_name
+        '韓国コスメ 正規品',               # F  item_promotion_name
+        'Y',                             # G  item_status
+        '',                              # H  end_date
+        str(price),                      # I  price_yen
+        str(retail_price),               # J  retail_price_yen
+        '100',                           # K  quantity
+        option_str,                      # L  option_info
+        '',                              # M  additional_option_info
+        '',                              # N  additional_option_text
+        main_image,                      # O  image_main_url
+        other_images,                    # P  image_other_url
+        '',                              # Q  video_url
+        '',                              # R  image_option_info
+        '',                              # S  image_additional_option_info
+        '',                              # T  header_html
+        '',                              # U  footer_html
+        detail_html,                     # V  item_description
+        QOO10_KSE_SHIPPING_CODE,         # W  Shipping_number
+        '',                              # X  option_number
+        '一般発送',                       # Y  available_shipping_date
+        '7',                             # Z  desired_shipping_date
+        search_kw,                       # AA search_keyword
+        '1',                             # AB item_condition_type (새상품)
+        '2',                             # AC origin_type (해외)
+        '',                              # AD origin_region_id
+        'KR',                            # AE origin_country_id
+        '',                              # AF origin_others
+        '',                              # AG medication_type
+        str(weight),                     # AH item_weight
+        '',                              # AI item_material
+        '',                              # AJ model_name
+        '',                              # AK external_product_type
+        '',                              # AL external_product_id
+        '',                              # AM manufacture_date
+        '',                              # AN expiration_date_type
+        '',                              # AO expiration_date_MFD
+        '',                              # AP expiration_date_PAO
+        '',                              # AQ expiration_date_EXP
+        'N',                             # AR under18s_display
+        '',                              # AS A/S_info
+        '',                              # AT buy_limit_type
+        '',                              # AU buy_limit_date
+        '',                              # AV buy_limit_qty
+    ]
+    return row
 
 
 # ══════════════════════════════════════════════════════════════
@@ -83,11 +282,7 @@ TREND_HEADERS = [
 ]
 
 def update_trend_sheet(trend_data: dict):
-    """
-    PHASE A 트렌드 분석 결과를 시트에 기록
-    Args:
-        trend_data: trend_analyzer.run_trend_analysis_combined() 반환값
-    """
+    """PHASE A 트렌드 분석 결과를 시트에 기록"""
     client = _get_sheets_client()
     if not client:
         return
@@ -99,7 +294,6 @@ def update_trend_sheet(trend_data: dict):
     ws = _get_or_create_worksheet(spreadsheet, "트렌드분석")
     timestamp = trend_data.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-    # 헤더 확인/설정
     try:
         existing = ws.row_values(1)
         if not existing or existing[0] != TREND_HEADERS[0]:
@@ -108,7 +302,6 @@ def update_trend_sheet(trend_data: dict):
     except Exception:
         ws.update("A1", [TREND_HEADERS])
 
-    # 소싱 키워드 데이터 추가
     rows = []
     for item in trend_data.get("sourcing_keywords", []):
         rows.append([
@@ -130,6 +323,7 @@ def update_trend_sheet(trend_data: dict):
 
     if rows:
         next_row = len(ws.get_all_values()) + 1
+        _ensure_sheet_rows(ws, next_row + len(rows))
         ws.update(f"A{next_row}", rows)
         logger.info(f"[시트] 트렌드분석 {len(rows)}행 추가 (row {next_row}~)")
 
@@ -149,11 +343,7 @@ SOURCING_HEADERS = [
 ]
 
 def update_sourcing_sheet(items: list):
-    """
-    PHASE B+C 소싱 후보 결과를 시트에 기록
-    Args:
-        items: 스코어링 완료된 상품 리스트
-    """
+    """PHASE B+C 소싱 후보 결과를 시트에 기록"""
     client = _get_sheets_client()
     if not client:
         return
@@ -165,7 +355,6 @@ def update_sourcing_sheet(items: list):
     ws = _get_or_create_worksheet(spreadsheet, "소싱후보")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # 헤더
     try:
         existing = ws.row_values(1)
         if not existing or existing[0] != SOURCING_HEADERS[0]:
@@ -173,7 +362,6 @@ def update_sourcing_sheet(items: list):
     except Exception:
         ws.update("A1", [SOURCING_HEADERS])
 
-    # 데이터 행 생성
     rows = []
     for item in items:
         pi = item.get("price_info") or {}
@@ -217,25 +405,19 @@ def update_sourcing_sheet(items: list):
 
     if rows:
         next_row = len(ws.get_all_values()) + 1
+        _ensure_sheet_rows(ws, next_row + len(rows))
         ws.update(f"A{next_row}", rows)
         logger.info(f"[시트] 소싱후보 {len(rows)}행 추가")
 
 
 # ══════════════════════════════════════════════════════════════
-# 3. 큐텐업로드 탭 업데이트
+# 3. 큐텐업로드 탭 업데이트 ★ v0.8 전면 교체
 # ══════════════════════════════════════════════════════════════
-
-UPLOAD_HEADERS = [
-    "수집일시", "상품ID", "상품명(JP)", "판매가(JPY)", "마진율",
-    "등급", "최종점수", "카테고리(JP)", "브랜드",
-    "상세이미지수", "HTML생성", "업로드상태"
-]
 
 def update_upload_sheet(items: list):
     """
-    최종 통과 상품을 큐텐업로드 탭에 기록
-    Args:
-        items: pass_final == True인 상품 리스트
+    ★ v0.8: 최종 통과 상품을 공식 48컬럼 양식으로 기록
+    시트에서 직접 복사 → 공식 양식 Excel에 붙여넣기 가능
     """
     client = _get_sheets_client()
     if not client:
@@ -245,37 +427,51 @@ def update_upload_sheet(items: list):
     if not spreadsheet:
         return
 
-    ws = _get_or_create_worksheet(spreadsheet, "큐텐업로드")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ws = _get_or_create_worksheet(spreadsheet, "큐텐업로드", rows=1000, cols=50)
 
+    # ★ 48컬럼 + 여유분 확보
+    _ensure_sheet_cols(ws, len(OFFICIAL_HEADERS) + 2)
+
+    # 헤더 확인/설정
     try:
         existing = ws.row_values(1)
-        if not existing or existing[0] != UPLOAD_HEADERS[0]:
-            ws.update("A1", [UPLOAD_HEADERS])
+        if not existing or existing[0] != OFFICIAL_HEADERS[0]:
+            ws.update("A1", [OFFICIAL_HEADERS])
+            logger.info("[시트] 큐텐업로드 헤더 설정 (공식 48컬럼)")
     except Exception:
-        ws.update("A1", [UPLOAD_HEADERS])
+        ws.update("A1", [OFFICIAL_HEADERS])
+        logger.info("[시트] 큐텐업로드 헤더 초기화 (공식 48컬럼)")
 
+    # 데이터 행 생성
     rows = []
+    brand_matched = 0
+    category_dist = {}
+    weight_dist = {}
+
     for item in items:
-        rows.append([
-            timestamp,
-            item.get("item_id", ""),
-            item.get("name_jp", ""),
-            item.get("sell_price_jpy", ""),
-            f"{item.get('margin_rate', 0) * 100:.1f}%",
-            item.get("grade", ""),
-            item.get("final_score", ""),
-            item.get("category_jp", ""),
-            item.get("brand", ""),
-            len(item.get("detail_images", [])),
-            "✅" if item.get("detail_html") else "❌",
-            "대기",
-        ])
+        row = _build_upload_row(item)
+        rows.append(row)
+
+        # 통계
+        if row[3]:  # D열: brand_number
+            brand_matched += 1
+        cat = row[2]  # C열: category_number
+        category_dist[cat] = category_dist.get(cat, 0) + 1
+        w = row[33]  # AH열: item_weight
+        weight_dist[w] = weight_dist.get(w, 0) + 1
 
     if rows:
         next_row = len(ws.get_all_values()) + 1
+        _ensure_sheet_rows(ws, next_row + len(rows))
         ws.update(f"A{next_row}", rows)
-        logger.info(f"[시트] 큐텐업로드 {len(rows)}행 추가")
+
+        top5 = sorted(category_dist.items(), key=lambda x: x[1], reverse=True)[:5]
+        logger.info(f"[시트] 큐텐업로드 {len(rows)}행 추가 (공식 48컬럼)")
+        logger.info(f"[시트] 브랜드 매칭: {brand_matched}/{len(rows)}")
+        logger.info(f"[시트] 카테고리 TOP5: {dict(top5)}")
+        logger.info(f"[시트] 무게 분포: {dict(weight_dist)}")
+    else:
+        logger.info("[시트] 큐텐업로드 추가할 데이터 없음")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -309,6 +505,7 @@ def log_run_info(summary: dict):
 
     if rows:
         next_row = len(ws.get_all_values()) + 1
+        _ensure_sheet_rows(ws, next_row + len(rows))
         ws.update(f"A{next_row}", rows)
         logger.info(f"[시트] 운영정보 {len(rows)}행 추가")
 
@@ -317,15 +514,9 @@ def log_run_info(summary: dict):
 # 5. 전체 시트 업데이트 (통합)
 # ══════════════════════════════════════════════════════════════
 
-def update_all_sheets(trend_data: dict, scored_items: list, final_candidates: list, run_summary: dict):
-    """
-    전체 시트 일괄 업데이트
-    Args:
-        trend_data: PHASE A 결과
-        scored_items: 스코어링 완료된 전체 상품
-        final_candidates: 최종 통과 상품
-        run_summary: 실행 요약 정보
-    """
+def update_all_sheets(trend_data: dict, scored_items: list,
+                      final_candidates: list, run_summary: dict):
+    """전체 시트 일괄 업데이트"""
     logger.info("========== Google Sheets 업데이트 시작 ==========")
 
     update_trend_sheet(trend_data)
@@ -333,31 +524,32 @@ def update_all_sheets(trend_data: dict, scored_items: list, final_candidates: li
     update_upload_sheet(final_candidates)
     log_run_info(run_summary)
 
-    logger.info(f"========== Google Sheets 업데이트 완료 ==========")
+    logger.info("========== Google Sheets 업데이트 완료 ==========")
     logger.info(f"  트렌드: {len(trend_data.get('sourcing_keywords', []))}행")
     logger.info(f"  소싱후보: {len(scored_items)}행")
-    logger.info(f"  큐텐업로드: {len(final_candidates)}행")
+    logger.info(f"  큐텐업로드: {len(final_candidates)}행 (공식 48컬럼)")
 
 
 # ══════════════════════════════════════════════════════════════
 # 직접 실행 (테스트)
 # ══════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [%(levelname)s] %(message)s")
 
     if not QOO10_SHEET_ID:
         print("ERROR: QOO10_SHEET_ID 환경변수를 설정해주세요.")
         exit(1)
 
-    # 연결 테스트
     client = _get_sheets_client()
     if client:
         spreadsheet = _get_spreadsheet(client)
         if spreadsheet:
             print(f"시트 연결 성공: {spreadsheet.title}")
-            worksheets = spreadsheet.worksheets()
-            for ws in worksheets:
-                print(f"  탭: {ws.title}")
+            for ws in spreadsheet.worksheets():
+                print(f"  탭: {ws.title} ({ws.row_count}행 × {ws.col_count}열)")
+            print(f"\n큐텐업로드 헤더 수: {len(OFFICIAL_HEADERS)}컬럼 (A~AV)")
+            print(f"uploader import 상태: {'성공' if _USE_UPLOADER_IMPORT else '폴백'}")
         else:
             print("시트 열기 실패")
     else:
