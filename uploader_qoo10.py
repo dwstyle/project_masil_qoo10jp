@@ -1,15 +1,15 @@
 """
 uploader_qoo10.py – Qoo10 J·QSM 업로드용 엑셀 생성 & Drive 업로드 모듈
 Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.9
+Version: 0.9.1
 
-★ v0.8 → v0.9 변경사항:
-  1. 공식 대량등록 양식 48컬럼(A~AV) 완전 대응
-  2. item_weight 카테고리별 자동 매핑 (정책서 6.3 기준)
-  3. quantity 99 → 100
-  4. item_promotion_name = '韓国コスメ 正規品' (고정)
-  5. AG~AV 16개 컬럼 추가 (의약품분류~구매제한)
-  6. 기존 카테고리·브랜드 매핑/Drive 업로드/로컬 백업 로직 유지
+★ v0.9 → v0.9.1 변경사항:
+  1. 공식 양식 50컬럼 대응 (H: start_date, L: taxrate 추가)
+  2. 추가이미지 구분자 || → $$ (Qoo10 공식)
+  3. 검색키워드 구분자 , → $$ + 각 30글자 제한
+  4. 상품명 홍보성 금지 문구 자동 제거
+  5. available_shipping_date: 一般発送 → 3
+  6. end_date: 2030-12-31 고정
 """
 
 import os
@@ -31,7 +31,6 @@ QOO10_KSE_SHIPPING_CODE = os.environ.get("QOO10_KSE_SHIPPING_CODE", "813137")
 # Qoo10 카테고리 & 브랜드 매핑
 # ══════════════════════════════════════════════════════════════
 
-# 브랜드명 → Qoo10 브랜드 코드
 BRAND_CODE_MAP = {
     "vt": "57851",
     "vt cosmetics": "57851",
@@ -54,7 +53,6 @@ BRAND_CODE_MAP = {
     "설화수": "27508",
 }
 
-# 키워드 → Qoo10 소카테고리 코드 (우선순위: 위에서부터 매칭)
 KEYWORD_CATEGORY_MAP = [
     # ── 스킨케어 ──
     (["토너", "스킨", "화장수", "toner"], "320001619"),
@@ -186,7 +184,6 @@ KEYWORD_CATEGORY_MAP = [
     (["유산균", "프로바이오틱스", "probiotics"], "320002771"),
 ]
 
-# KJ9603 중분류 → Qoo10 기본값 (키워드 매칭 실패 시)
 DEFAULT_CATEGORY_MAP = {
     "680": "320001621",
     "688": "320001663",
@@ -202,110 +199,52 @@ DEFAULT_CATEGORY_MAP = {
     "748": "320000473",
 }
 
-# ★ v0.9 신규: 카테고리코드 → 무게(kg) 매핑 (정책서 6.3 기준)
 CATEGORY_WEIGHT_MAP = {
     # 립메이크업 — 0.10kg
     "320001710": 0.10, "320001714": 0.10, "320001715": 0.10,
     "320001716": 0.10, "320001713": 0.10,
 
     # 소형 포인트메이크업/스킨케어 — 0.25kg
-    "320001623": 0.25,  # 에센스/세럼/앰플
-    "320001622": 0.25,  # 아이크림
-    "320001624": 0.25,  # 페이스오일
-    "320001625": 0.25,  # 올인원
-    "320001633": 0.25,  # 픽서
-    "320001634": 0.25,  # 미스트
-    "320001655": 0.25,  # 컨실러
-    "320001663": 0.25,  # 쿠션
-    "320001667": 0.25,  # 하이라이터
-    "320001670": 0.25,  # 쉐이딩
-    "320001673": 0.25,  # BB크림
-    "320001674": 0.25,  # CC크림
-    "320001676": 0.25,  # 프라이머
-    "320001683": 0.25,  # 아이브로우
-    "320001695": 0.25,  # 아이섀도우
-    "320001698": 0.25,  # 섀도팔레트
-    "320001701": 0.25,  # 아이라이너
-    "320001705": 0.25,  # 마스카라
-    "320001707": 0.25,  # 속눈썹
-    "320001717": 0.25,  # 블러셔
-    "320001725": 0.25,  # 브러시
-    "320001727": 0.25,  # 뷰러
-    "320001730": 0.25,  # 퍼프
-    "320001741": 0.25,  # 선크림
-    "320001742": 0.25,  # 선스틱
-    "320001743": 0.25,  # 선쿠션
-    "320001744": 0.25,  # 선젤
-    "320001746": 0.25,  # 선스프레이
-    "320001763": 0.25,  # 핸드크림
-    "320001767": 0.25,  # 풋크림
-    "320001806": 0.25,  # 네일스티커
-    "320001805": 0.25,  # 네일팁
-    "320001808": 0.25,  # 매니큐어
-    "320001809": 0.25,  # 젤네일
-    "320001829": 0.25,  # 향수
-    "320001834": 0.25,  # 남성토너
-    "320001835": 0.25,  # 남성크림
-    "320001836": 0.25,  # 남성에센스
-    "320001838": 0.25,  # 남성올인원
-    "320001844": 0.25,  # 쉐이빙
+    "320001623": 0.25, "320001622": 0.25, "320001624": 0.25,
+    "320001625": 0.25, "320001633": 0.25, "320001634": 0.25,
+    "320001655": 0.25, "320001663": 0.25, "320001667": 0.25,
+    "320001670": 0.25, "320001673": 0.25, "320001674": 0.25,
+    "320001676": 0.25, "320001683": 0.25, "320001695": 0.25,
+    "320001698": 0.25, "320001701": 0.25, "320001705": 0.25,
+    "320001707": 0.25, "320001717": 0.25, "320001725": 0.25,
+    "320001727": 0.25, "320001730": 0.25, "320001741": 0.25,
+    "320001742": 0.25, "320001743": 0.25, "320001744": 0.25,
+    "320001746": 0.25, "320001763": 0.25, "320001767": 0.25,
+    "320001806": 0.25, "320001805": 0.25, "320001808": 0.25,
+    "320001809": 0.25, "320001829": 0.25, "320001834": 0.25,
+    "320001835": 0.25, "320001836": 0.25, "320001838": 0.25,
+    "320001844": 0.25,
 
     # 토너/로션/클렌징/크림/팩 — 0.50kg
-    "320001619": 0.50,  # 토너
-    "320001620": 0.50,  # 토너패드
-    "320001621": 0.50,  # 크림/로션
-    "320001626": 0.50,  # 보습젤
-    "320001627": 0.50,  # 워시오프팩
-    "320001628": 0.50,  # 시트마스크
-    "320001629": 0.50,  # 모공팩
-    "320001630": 0.50,  # 아이패치
-    "320001631": 0.50,  # 코팩
-    "320001632": 0.50,  # 립팩
-    "320001635": 0.50,  # 필링
-    "320001636": 0.50,  # 마사지크림
-    "320001637": 0.50,  # 마사지오일
-    "320001639": 0.50,  # 클렌징폼
-    "320001640": 0.50,  # 세안비누
-    "320001641": 0.50,  # 세안파우더
-    "320001643": 0.50,  # 클렌징오일
-    "320001644": 0.50,  # 클렌징밀크
-    "320001645": 0.50,  # 클렌징크림
-    "320001646": 0.50,  # 클렌징워터
-    "320001648": 0.50,  # 클렌징젤
-    "320001649": 0.50,  # 클렌징밤
-    "320001650": 0.50,  # 리무버
-    "320001651": 0.50,  # 클렌징시트
-    "320001660": 0.50,  # 리퀴드파운데이션
-    "320001661": 0.50,  # 파우더파운데이션
-    "320001662": 0.50,  # 크림파운데이션
-    "320001664": 0.50,  # 스틱파운데이션
-    "320001665": 0.50,  # 루스파우더
-    "320001666": 0.50,  # 프레스트파우더
+    "320001619": 0.50, "320001620": 0.50, "320001621": 0.50,
+    "320001626": 0.50, "320001627": 0.50, "320001628": 0.50,
+    "320001629": 0.50, "320001630": 0.50, "320001631": 0.50,
+    "320001632": 0.50, "320001635": 0.50, "320001636": 0.50,
+    "320001637": 0.50, "320001639": 0.50, "320001640": 0.50,
+    "320001641": 0.50, "320001643": 0.50, "320001644": 0.50,
+    "320001645": 0.50, "320001646": 0.50, "320001648": 0.50,
+    "320001649": 0.50, "320001650": 0.50, "320001651": 0.50,
+    "320001660": 0.50, "320001661": 0.50, "320001662": 0.50,
+    "320001664": 0.50, "320001665": 0.50, "320001666": 0.50,
 
     # 헤어/바디 — 0.75kg
-    "320001753": 0.75,  # 바디워시
-    "320001754": 0.75,  # 바디스크럽
-    "320001755": 0.75,  # 바디오일
-    "320001756": 0.75,  # 바디크림/로션
-    "320001760": 0.75,  # 바디미스트
-    "320001752": 0.75,  # 데오드란트
-    "320001775": 0.75,  # 샴푸
-    "320001777": 0.75,  # 컨디셔너
-    "320001778": 0.75,  # 헤어오일
-    "320001780": 0.75,  # 트리트먼트
-    "320001781": 0.75,  # 헤어에센스
-    "320001784": 0.75,  # 스타일링
-    "320001793": 0.75,  # 염색
+    "320001753": 0.75, "320001754": 0.75, "320001755": 0.75,
+    "320001756": 0.75, "320001760": 0.75, "320001752": 0.75,
+    "320001775": 0.75, "320001777": 0.75, "320001778": 0.75,
+    "320001780": 0.75, "320001781": 0.75, "320001784": 0.75,
+    "320001793": 0.75,
 
     # 건강식품/세트 — 1.00kg
-    "320002809": 1.00,  # 콜라겐
-    "320002766": 1.00,  # 프로틴
-    "320002747": 1.00,  # 비타민
-    "320002771": 1.00,  # 유산균
+    "320002809": 1.00, "320002766": 1.00, "320002747": 1.00,
+    "320002771": 1.00,
 }
 DEFAULT_WEIGHT = 0.50
 
-# ★ v0.9 신규: 카테고리 JP 표시명 (검색어 추출용)
 CATEGORY_JP_NAME = {
     "320001619": "スキンケア>化粧水",
     "320001621": "スキンケア>クリーム",
@@ -355,22 +294,44 @@ def _match_brand_code(item):
 
 
 def _get_item_weight(category_code):
-    """★ v0.9: 카테고리코드 → 상품 무게(kg) (정책서 6.3 기준)"""
+    """카테고리코드 → 상품 무게(kg)"""
     return CATEGORY_WEIGHT_MAP.get(category_code, DEFAULT_WEIGHT)
 
 
+# ★ v0.9.1: 홍보성 금지 문구 제거
+PROHIBITED_WORDS = [
+    '特価', '割引', '破格', 'セール', 'SALE', 'sale',
+    '激安', '最安', '限定', '半額', 'OFF', '%OFF',
+    '送料無料', '無料配送', 'ポイント', '倍',
+    '특가', '할인', '파격', '세일', '한정', '무료배송',
+]
+
+
+def _remove_prohibited_words(name: str) -> str:
+    """★ v0.9.1: Qoo10 상품명 홍보성 문구 자동 제거"""
+    for word in PROHIBITED_WORDS:
+        name = name.replace(word, '')
+    name = re.sub(r'\[\s*\]', '', name)
+    name = re.sub(r'\(\s*\)', '', name)
+    name = re.sub(r'\s{2,}', ' ', name)
+    return name.strip()
+
+
 def _truncate_item_name(name, max_len=50):
-    """★ v0.9: 상품명 50자 제한 + 프로모션 텍스트 제거"""
+    """상품명 50자 제한 + 프로모션 텍스트 제거"""
     if not name:
         return ""
+    # 한국어 프로모션 대괄호 제거
     cleaned = re.sub(r'\[.*?(?:특가|한정|세일|할인|이벤트|봄맞이).*?\]\s*', '', name)
+    # ★ v0.9.1: 일본어 홍보 금지 문구 제거
+    cleaned = _remove_prohibited_words(cleaned)
     if len(cleaned) <= max_len:
         return cleaned
     return cleaned[:max_len]
 
 
 def _extract_search_keywords(item, category_code):
-    """★ v0.9: 검색어 최대 10개 추출 (,구분 → Qoo10 형식)"""
+    """검색어 최대 10개 추출 ($$구분, 각 30글자 제한)"""
     keywords = []
     brand = (item.get("brand", "") or "").strip()
     if brand:
@@ -395,11 +356,13 @@ def _extract_search_keywords(item, category_code):
         if kw.lower() in name and kw not in keywords:
             keywords.append(kw)
 
-    return ",".join(keywords[:10])
+    # ★ v0.9.1: $$ 구분자 + 각 30글자 제한
+    return "$$".join([kw[:30] for kw in keywords if kw.strip()][:10])
 
 
 # ══════════════════════════════════════════════════════════════
-# 공식 48컬럼 헤더 (A~AV)
+# ★ v0.9.1: 공식 50컬럼 헤더 (A~AX)
+# H: start_date, L: taxrate 추가
 # ══════════════════════════════════════════════════════════════
 
 OFFICIAL_HEADERS = [
@@ -410,56 +373,58 @@ OFFICIAL_HEADERS = [
     "item_name",                      # E
     "item_promotion_name",            # F
     "item_status_Y/N/D",              # G
-    "end_date",                       # H
-    "price_yen",                      # I
-    "retail_price_yen",               # J
-    "quantity",                       # K
-    "option_info",                    # L
-    "additional_option_info",         # M
-    "additional_option_text",         # N
-    "image_main_url",                 # O
-    "image_other_url",                # P
-    "video_url",                      # Q
-    "image_option_info",              # R
-    "image_additional_option_info",   # S
-    "header_html",                    # T
-    "footer_html",                    # U
-    "item_description",               # V
-    "Shipping_number",                # W
-    "option_number",                  # X
-    "available_shipping_date",        # Y
-    "desired_shipping_date",          # Z
-    "search_keyword",                 # AA
-    "item_condition_type",            # AB
-    "origin_type",                    # AC
-    "origin_region_id",               # AD
-    "origin_country_id",              # AE
-    "origin_others",                  # AF
-    "medication_type",                # AG ★ v0.9 추가
-    "item_weight",                    # AH ★ v0.9 추가
-    "item_material",                  # AI ★ v0.9 추가
-    "model_name",                     # AJ ★ v0.9 추가
-    "external_product_type",          # AK ★ v0.9 추가
-    "external_product_id",            # AL ★ v0.9 추가
-    "manufacture_date",               # AM ★ v0.9 추가
-    "expiration_date_type",           # AN ★ v0.9 추가
-    "expiration_date_MFD",            # AO ★ v0.9 추가
-    "expiration_date_PAO",            # AP ★ v0.9 추가
-    "expiration_date_EXP",            # AQ ★ v0.9 추가
-    "under18s_display_Y/N",           # AR ★ v0.9 추가
-    "A/S_info",                       # AS ★ v0.9 추가
-    "buy_limit_type",                 # AT ★ v0.9 추가
-    "buy_limit_date",                 # AU ★ v0.9 추가
-    "buy_limit_qty",                  # AV ★ v0.9 추가
+    "start_date",                     # H  ★ v0.9.1 추가
+    "end_date",                       # I
+    "price_yen",                      # J
+    "retail_price_yen",               # K
+    "taxrate",                        # L  ★ v0.9.1 추가
+    "quantity",                       # M
+    "option_info",                    # N
+    "additional_option_info",         # O
+    "additional_option_text",         # P
+    "image_main_url",                 # Q
+    "image_other_url",                # R
+    "video_url",                      # S
+    "image_option_info",              # T
+    "image_additional_option_info",   # U
+    "header_html",                    # V
+    "footer_html",                    # W
+    "item_description",               # X
+    "Shipping_number",                # Y
+    "option_number",                  # Z
+    "available_shipping_date",        # AA
+    "desired_shipping_date",          # AB
+    "search_keyword",                 # AC
+    "item_condition_type",            # AD
+    "origin_type",                    # AE
+    "origin_region_id",               # AF
+    "origin_country_id",              # AG
+    "origin_others",                  # AH
+    "medication_type",                # AI
+    "item_weight",                    # AJ
+    "item_material",                  # AK
+    "model_name",                     # AL
+    "external_product_type",          # AM
+    "external_product_id",            # AN
+    "manufacture_date",               # AO
+    "expiration_date_type",           # AP
+    "expiration_date_MFD",            # AQ
+    "expiration_date_PAO",            # AR
+    "expiration_date_EXP",            # AS
+    "under18s_display_Y/N",           # AT
+    "A/S_info",                       # AU
+    "buy_limit_type",                 # AV
+    "buy_limit_date",                 # AW
+    "buy_limit_qty",                  # AX
 ]
 
 
 # ══════════════════════════════════════════════════════════════
-# 1. Qoo10 엑셀 생성 ★ v0.9 전면 교체
+# 1. Qoo10 엑셀 생성 ★ v0.9.1
 # ══════════════════════════════════════════════════════════════
 
 def generate_qoo10_excel(items: list) -> BytesIO:
-    """Qoo10 J·QSM 대량등록용 엑셀 파일 생성 (공식 48컬럼)"""
+    """Qoo10 J·QSM 대량등록용 엑셀 파일 생성 (공식 50컬럼)"""
     try:
         import openpyxl
         from openpyxl.styles import Font, Alignment
@@ -497,7 +462,8 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         # 이미지
         thumbnail = item.get("thumbnail", "") or item.get("image_url", "")
         detail_images = item.get("detail_images", [])
-        other_images = "||".join(detail_images[:20]) if detail_images else ""
+        # ★ v0.9.1: 구분자 $$ 
+        other_images = "$$".join(detail_images[:20]) if detail_images else ""
 
         # 옵션
         detail = item.get("detail_info", {})
@@ -515,63 +481,65 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         if retail_price <= sell_price:
             retail_price = math.ceil(sell_price * 1.3)
 
-        # 상품명
+        # ★ v0.9.1: 상품명 홍보문구 제거 후 50자 제한
         name_jp = item.get("name_jp", item.get("name", ""))
         item_name = _truncate_item_name(name_jp)
 
         # 검색어
         search_kw = _extract_search_keywords(item, qoo10_cat)
 
-        # ── 48컬럼 행 데이터 (A~AV) ──
+        # ── 50컬럼 행 데이터 (A~AX) ──
         row_data = [
             "",                                                    # A  item_number
             f"KJ{item.get('product_id', '') or item.get('item_id', '')}",  # B  seller_unique_item_id
             qoo10_cat,                                             # C  category_number
             qoo10_brand,                                           # D  brand_number
             item_name,                                             # E  item_name
-            "韓国コスメ 正規品",                                     # F  ★ v0.9 고정
+            "韓国コスメ 正規品",                                     # F  item_promotion_name
             "Y",                                                   # G  item_status
-            "",                                                    # H  end_date
-            sell_price,                                            # I  price_yen
-            retail_price,                                          # J  retail_price_yen
-            100,                                                   # K  ★ v0.9: 99→100
-            option_str,                                            # L  option_info
-            "",                                                    # M  additional_option_info
-            "",                                                    # N  additional_option_text
-            thumbnail,                                             # O  image_main_url
-            other_images,                                          # P  image_other_url
-            "",                                                    # Q  video_url
-            "",                                                    # R  image_option_info
-            "",                                                    # S  image_additional_option_info
-            "",                                                    # T  header_html
-            "",                                                    # U  footer_html
-            item.get("detail_html", ""),                          # V  item_description
-            QOO10_KSE_SHIPPING_CODE,                              # W  Shipping_number
-            "",                                                    # X  option_number
-            "一般発送",                                             # Y  available_shipping_date
-            "7",                                                   # Z  desired_shipping_date
-            search_kw,                                             # AA search_keyword
-            "1",                                                   # AB item_condition_type
-            "2",                                                   # AC origin_type (海外)
-            "",                                                    # AD origin_region_id
-            "KR",                                                  # AE origin_country_id
-            "",                                                    # AF origin_others
-            "",                                                    # AG medication_type       ★ v0.9
-            str(weight),                                           # AH item_weight           ★ v0.9
-            "",                                                    # AI item_material          ★ v0.9
-            "",                                                    # AJ model_name             ★ v0.9
-            "",                                                    # AK external_product_type  ★ v0.9
-            "",                                                    # AL external_product_id    ★ v0.9
-            "",                                                    # AM manufacture_date       ★ v0.9
-            "",                                                    # AN expiration_date_type   ★ v0.9
-            "",                                                    # AO expiration_date_MFD    ★ v0.9
-            "",                                                    # AP expiration_date_PAO    ★ v0.9
-            "",                                                    # AQ expiration_date_EXP    ★ v0.9
-            "N",                                                   # AR under18s_display       ★ v0.9
-            "",                                                    # AS A/S_info               ★ v0.9
-            "",                                                    # AT buy_limit_type          ★ v0.9
-            "",                                                    # AU buy_limit_date          ★ v0.9
-            "",                                                    # AV buy_limit_qty           ★ v0.9
+            "",                                                    # H  start_date (공란=즉시)  ★ v0.9.1
+            "2030-12-31",                                          # I  end_date               ★ v0.9.1
+            sell_price,                                            # J  price_yen
+            retail_price,                                          # K  retail_price_yen
+            "",                                                    # L  taxrate (공란=기본)     ★ v0.9.1
+            100,                                                   # M  quantity
+            option_str,                                            # N  option_info
+            "",                                                    # O  additional_option_info
+            "",                                                    # P  additional_option_text
+            thumbnail,                                             # Q  image_main_url
+            other_images,                                          # R  image_other_url
+            "",                                                    # S  video_url
+            "",                                                    # T  image_option_info
+            "",                                                    # U  image_additional_option_info
+            "",                                                    # V  header_html
+            "",                                                    # W  footer_html
+            item.get("detail_html", ""),                          # X  item_description
+            QOO10_KSE_SHIPPING_CODE,                              # Y  Shipping_number
+            "",                                                    # Z  option_number
+            "3",                                                   # AA available_shipping_date ★ v0.9.1
+            "7",                                                   # AB desired_shipping_date
+            search_kw,                                             # AC search_keyword
+            "1",                                                   # AD item_condition_type (신품)
+            "2",                                                   # AE origin_type (해외)
+            "",                                                    # AF origin_region_id
+            "KR",                                                  # AG origin_country_id
+            "",                                                    # AH origin_others
+            "",                                                    # AI medication_type
+            str(weight),                                           # AJ item_weight
+            "",                                                    # AK item_material
+            "",                                                    # AL model_name
+            "",                                                    # AM external_product_type
+            "",                                                    # AN external_product_id
+            "",                                                    # AO manufacture_date
+            "",                                                    # AP expiration_date_type
+            "",                                                    # AQ expiration_date_MFD
+            "",                                                    # AR expiration_date_PAO
+            "",                                                    # AS expiration_date_EXP
+            "N",                                                   # AT under18s_display
+            "",                                                    # AU A/S_info
+            "",                                                    # AV buy_limit_type
+            "",                                                    # AW buy_limit_date
+            "",                                                    # AX buy_limit_qty
         ]
 
         for col, value in enumerate(row_data, 1):
@@ -580,9 +548,9 @@ def generate_qoo10_excel(items: list) -> BytesIO:
     # ── 열 너비 ──
     col_widths = {
         "A": 12, "B": 18, "C": 15, "D": 12, "E": 50,
-        "F": 22, "G": 8, "H": 12, "I": 12, "J": 12,
-        "K": 8, "L": 40, "O": 50, "P": 50, "V": 30,
-        "W": 12, "AA": 40, "AE": 8, "AH": 8,
+        "F": 22, "G": 8, "H": 14, "I": 14, "J": 12,
+        "K": 12, "L": 8, "M": 8, "N": 40, "Q": 50,
+        "R": 50, "X": 30, "Y": 12, "AC": 40, "AG": 8, "AJ": 8,
     }
     for col_letter, width in col_widths.items():
         ws.column_dimensions[col_letter].width = width
@@ -591,7 +559,7 @@ def generate_qoo10_excel(items: list) -> BytesIO:
     wb.save(output)
     output.seek(0)
 
-    logger.info(f"[엑셀] Qoo10 업로드 파일 생성: {len(items)}건 (48컬럼)")
+    logger.info(f"[엑셀] Qoo10 업로드 파일 생성: {len(items)}건 (50컬럼)")
     logger.info(f"[엑셀] 브랜드 매칭: {brand_matched}/{len(items)}건")
     top5_cat = sorted(cat_stats.items(), key=lambda x: -x[1])[:5]
     logger.info(f"[엑셀] 카테고리 TOP5: {dict(top5_cat)}")
@@ -601,7 +569,7 @@ def generate_qoo10_excel(items: list) -> BytesIO:
 
 
 # ══════════════════════════════════════════════════════════════
-# 2. Google Drive 업로드 (v0.8과 동일 — 변경 없음)
+# 2. Google Drive 업로드 (변경 없음)
 # ══════════════════════════════════════════════════════════════
 
 def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
@@ -681,7 +649,7 @@ def upload_to_drive(file_bytes: BytesIO, filename: str = None) -> str:
 
 
 # ══════════════════════════════════════════════════════════════
-# 3. 통합 실행 (v0.8과 동일 — 변경 없음)
+# 3. 통합 실행 (변경 없음)
 # ══════════════════════════════════════════════════════════════
 
 def generate_and_upload(items: list) -> dict:
@@ -752,6 +720,6 @@ if __name__ == "__main__":
         with open("test_qoo10_upload.xlsx", "wb") as f:
             f.write(excel.read())
         print("테스트 엑셀 생성 완료: test_qoo10_upload.xlsx")
-        print(f"헤더 수: {len(OFFICIAL_HEADERS)}컬럼 (A~AV)")
+        print(f"헤더 수: {len(OFFICIAL_HEADERS)}컬럼 (A~AX)")
     else:
         print("엑셀 생성 실패")

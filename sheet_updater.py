@@ -1,21 +1,15 @@
 """
 sheet_updater.py – Google Sheets 업데이트 모듈
 Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.8
+Version: 0.8.1
 
-★ v0.7 → v0.8 변경사항:
-  1. "큐텐업로드" 탭 → 공식 48컬럼(A~AV) 구조로 교체
-  2. _ensure_sheet_rows() 추가 — grid limit 400 에러 방지
-  3. _ensure_sheet_cols() 추가 — 48컬럼 수용
-  4. uploader_qoo10.py의 매핑 함수를 import해서 사용 (중복 제거)
-  5. 소싱후보/트렌드분석/운영정보 탭 기존 로직 유지
-
-시트 탭 구조:
-  1. 트렌드분석   – PHASE A 결과 (라쿠텐·구글 트렌드)
-  2. 소싱후보     – PHASE B+C 결과 (상품·가격·경쟁가·점수)
-  3. 큐텐업로드   – ★ 공식 48컬럼 양식 (업로드 대상)
-  4. 카테고리매핑 – KJ9603 ↔ Qoo10 카테고리
-  5. 운영정보     – 실행 로그, 환율, 배송비 변동 기록
+★ v0.8 → v0.8.1 변경사항:
+  1. 50컬럼 대응 (H: start_date, L: taxrate 추가)
+  2. 추가이미지 구분자 || → $$ 
+  3. 검색키워드 구분자 , → $$ + 각 30글자 제한
+  4. 상품명 홍보성 금지 문구 자동 제거
+  5. available_shipping_date: 一般発送 → 3
+  6. end_date: 2030-12-31 고정
 """
 
 import os
@@ -34,7 +28,6 @@ QOO10_KSE_SHIPPING_CODE = os.environ.get("QOO10_KSE_SHIPPING_CODE", "813137")
 
 # ══════════════════════════════════════════════════════════════
 # uploader_qoo10.py에서 매핑 함수 import (★ v0.8)
-# import 실패 시 로컬 폴백 함수 사용
 # ══════════════════════════════════════════════════════════════
 
 try:
@@ -43,6 +36,7 @@ try:
         _match_brand_code,
         _get_item_weight,
         _truncate_item_name,
+        _remove_prohibited_words,
         _extract_search_keywords,
         OFFICIAL_HEADERS,
         CATEGORY_JP_NAME,
@@ -53,11 +47,12 @@ except ImportError:
     logger.warning("[시트] uploader_qoo10 import 실패 → 로컬 폴백 사용")
     _USE_UPLOADER_IMPORT = False
 
-    # ── 폴백: 최소한의 매핑 (import 실패 시에만 사용) ─────────
+    # ── 폴백: 최소한의 매핑 ─────────
     OFFICIAL_HEADERS = [
         'item_number', 'seller_unique_item_id', 'category_number',
         'brand_number', 'item_name', 'item_promotion_name',
-        'item_status_Y/N/D', 'end_date', 'price_yen', 'retail_price_yen',
+        'item_status_Y/N/D', 'start_date', 'end_date',
+        'price_yen', 'retail_price_yen', 'taxrate',
         'quantity', 'option_info', 'additional_option_info',
         'additional_option_text', 'image_main_url', 'image_other_url',
         'video_url', 'image_option_info', 'image_additional_option_info',
@@ -73,6 +68,13 @@ except ImportError:
         'buy_limit_date', 'buy_limit_qty',
     ]
 
+    PROHIBITED_WORDS = [
+        '特価', '割引', '破格', 'セール', 'SALE', 'sale',
+        '激安', '最安', '限定', '半額', 'OFF', '%OFF',
+        '送料無料', '無料配送', 'ポイント', '倍',
+        '특가', '할인', '파격', '세일', '한정', '무료배송',
+    ]
+
     def _match_qoo10_category(item):
         return "320001621"
 
@@ -82,16 +84,25 @@ except ImportError:
     def _get_item_weight(category_code):
         return 0.50
 
+    def _remove_prohibited_words(name):
+        for word in PROHIBITED_WORDS:
+            name = name.replace(word, '')
+        name = re.sub(r'\[\s*\]', '', name)
+        name = re.sub(r'\(\s*\)', '', name)
+        name = re.sub(r'\s{2,}', ' ', name)
+        return name.strip()
+
     def _truncate_item_name(name, max_len=50):
         if not name:
             return ""
         cleaned = re.sub(r'\[.*?(?:특가|한정|세일|할인|이벤트|봄맞이).*?\]\s*', '', name)
+        cleaned = _remove_prohibited_words(cleaned)
         return cleaned[:max_len]
 
     def _extract_search_keywords(item, category_code):
         brand = (item.get("brand", "") or "").strip()
         parts = [brand, "韓国コスメ", "韓国", "Korean Beauty"]
-        return ",".join([p for p in parts if p][:10])
+        return "$$".join([p[:30] for p in parts if p][:10])
 
     CATEGORY_JP_NAME = {}
 
@@ -151,10 +162,7 @@ def _get_or_create_worksheet(spreadsheet, title, rows=1000, cols=30):
 
 
 def _ensure_sheet_rows(ws, needed_rows):
-    """
-    ★ v0.8 신규: 시트 행 수가 부족하면 자동 확장
-    → '소싱후보'!A2 exceeds grid limits 에러 방지
-    """
+    """시트 행 수가 부족하면 자동 확장"""
     try:
         current_rows = ws.row_count
         if current_rows < needed_rows:
@@ -166,10 +174,7 @@ def _ensure_sheet_rows(ws, needed_rows):
 
 
 def _ensure_sheet_cols(ws, needed_cols):
-    """
-    ★ v0.8 신규: 시트 컬럼 수가 부족하면 자동 확장
-    → 48컬럼 양식 수용
-    """
+    """시트 컬럼 수가 부족하면 자동 확장"""
     try:
         current_cols = ws.col_count
         if current_cols < needed_cols:
@@ -181,11 +186,11 @@ def _ensure_sheet_cols(ws, needed_cols):
 
 
 # ══════════════════════════════════════════════════════════════
-# 큐텐업로드 전용: 48컬럼 행 생성 (★ v0.8)
+# ★ v0.8.1: 큐텐업로드 전용 50컬럼 행 생성
 # ══════════════════════════════════════════════════════════════
 
 def _build_upload_row(item):
-    """단일 상품 dict → 공식 양식 48컬럼 리스트"""
+    """단일 상품 dict → 공식 양식 50컬럼 리스트"""
     cat_code = _match_qoo10_category(item)
     brand_code = _match_brand_code(item)
     price = int(item.get('sell_price_jpy', 0) or item.get('price_jpy', 0) or 0)
@@ -198,7 +203,8 @@ def _build_upload_row(item):
     images = item.get('detail_images', []) or item.get('images', []) or []
     thumbnail = item.get('thumbnail', '') or item.get('image_url', '')
     main_image = thumbnail or (images[0] if images else '')
-    other_images = '||'.join(images[:20]) if images else ''
+    # ★ v0.8.1: 구분자 $$
+    other_images = '$$'.join(images[:20]) if images else ''
 
     # 상세 HTML
     detail_html = item.get('detail_html', '') or ''
@@ -206,7 +212,7 @@ def _build_upload_row(item):
     # 판매자 상품코드
     seller_id = item.get('item_id', '') or item.get('product_id', '') or ''
 
-    # 검색어
+    # 검색어 (★ v0.8.1: $$ 구분 + 30글자 제한)
     search_kw = _extract_search_keywords(item, cat_code)
 
     # 옵션
@@ -226,47 +232,49 @@ def _build_upload_row(item):
         item_name,                       # E  item_name
         '韓国コスメ 正規品',               # F  item_promotion_name
         'Y',                             # G  item_status
-        '',                              # H  end_date
-        str(price),                      # I  price_yen
-        str(retail_price),               # J  retail_price_yen
-        '100',                           # K  quantity
-        option_str,                      # L  option_info
-        '',                              # M  additional_option_info
-        '',                              # N  additional_option_text
-        main_image,                      # O  image_main_url
-        other_images,                    # P  image_other_url
-        '',                              # Q  video_url
-        '',                              # R  image_option_info
-        '',                              # S  image_additional_option_info
-        '',                              # T  header_html
-        '',                              # U  footer_html
-        detail_html,                     # V  item_description
-        QOO10_KSE_SHIPPING_CODE,         # W  Shipping_number
-        '',                              # X  option_number
-        '一般発送',                       # Y  available_shipping_date
-        '7',                             # Z  desired_shipping_date
-        search_kw,                       # AA search_keyword
-        '1',                             # AB item_condition_type (새상품)
-        '2',                             # AC origin_type (해외)
-        '',                              # AD origin_region_id
-        'KR',                            # AE origin_country_id
-        '',                              # AF origin_others
-        '',                              # AG medication_type
-        str(weight),                     # AH item_weight
-        '',                              # AI item_material
-        '',                              # AJ model_name
-        '',                              # AK external_product_type
-        '',                              # AL external_product_id
-        '',                              # AM manufacture_date
-        '',                              # AN expiration_date_type
-        '',                              # AO expiration_date_MFD
-        '',                              # AP expiration_date_PAO
-        '',                              # AQ expiration_date_EXP
-        'N',                             # AR under18s_display
-        '',                              # AS A/S_info
-        '',                              # AT buy_limit_type
-        '',                              # AU buy_limit_date
-        '',                              # AV buy_limit_qty
+        '',                              # H  start_date (공란=즉시)    ★ v0.8.1
+        '2030-12-31',                    # I  end_date                 ★ v0.8.1
+        str(price),                      # J  price_yen
+        str(retail_price),               # K  retail_price_yen
+        '',                              # L  taxrate (공란=기본)       ★ v0.8.1
+        '100',                           # M  quantity
+        option_str,                      # N  option_info
+        '',                              # O  additional_option_info
+        '',                              # P  additional_option_text
+        main_image,                      # Q  image_main_url
+        other_images,                    # R  image_other_url
+        '',                              # S  video_url
+        '',                              # T  image_option_info
+        '',                              # U  image_additional_option_info
+        '',                              # V  header_html
+        '',                              # W  footer_html
+        detail_html,                     # X  item_description
+        QOO10_KSE_SHIPPING_CODE,         # Y  Shipping_number
+        '',                              # Z  option_number
+        '3',                             # AA available_shipping_date  ★ v0.8.1
+        '7',                             # AB desired_shipping_date
+        search_kw,                       # AC search_keyword
+        '1',                             # AD item_condition_type (신품)
+        '2',                             # AE origin_type (해외)
+        '',                              # AF origin_region_id
+        'KR',                            # AG origin_country_id
+        '',                              # AH origin_others
+        '',                              # AI medication_type
+        str(weight),                     # AJ item_weight
+        '',                              # AK item_material
+        '',                              # AL model_name
+        '',                              # AM external_product_type
+        '',                              # AN external_product_id
+        '',                              # AO manufacture_date
+        '',                              # AP expiration_date_type
+        '',                              # AQ expiration_date_MFD
+        '',                              # AR expiration_date_PAO
+        '',                              # AS expiration_date_EXP
+        'N',                             # AT under18s_display
+        '',                              # AU A/S_info
+        '',                              # AV buy_limit_type
+        '',                              # AW buy_limit_date
+        '',                              # AX buy_limit_qty
     ]
     return row
 
@@ -411,13 +419,12 @@ def update_sourcing_sheet(items: list):
 
 
 # ══════════════════════════════════════════════════════════════
-# 3. 큐텐업로드 탭 업데이트 ★ v0.8 전면 교체
+# 3. 큐텐업로드 탭 업데이트 ★ v0.8.1
 # ══════════════════════════════════════════════════════════════
 
 def update_upload_sheet(items: list):
     """
-    ★ v0.8: 최종 통과 상품을 공식 48컬럼 양식으로 기록
-    시트에서 직접 복사 → 공식 양식 Excel에 붙여넣기 가능
+    ★ v0.8.1: 최종 통과 상품을 공식 50컬럼 양식으로 기록
     """
     client = _get_sheets_client()
     if not client:
@@ -427,9 +434,9 @@ def update_upload_sheet(items: list):
     if not spreadsheet:
         return
 
-    ws = _get_or_create_worksheet(spreadsheet, "큐텐업로드", rows=1000, cols=50)
+    ws = _get_or_create_worksheet(spreadsheet, "큐텐업로드", rows=1000, cols=55)
 
-    # ★ 48컬럼 + 여유분 확보
+    # ★ 50컬럼 + 여유분 확보
     _ensure_sheet_cols(ws, len(OFFICIAL_HEADERS) + 2)
 
     # 헤더 확인/설정
@@ -437,10 +444,10 @@ def update_upload_sheet(items: list):
         existing = ws.row_values(1)
         if not existing or existing[0] != OFFICIAL_HEADERS[0]:
             ws.update("A1", [OFFICIAL_HEADERS])
-            logger.info("[시트] 큐텐업로드 헤더 설정 (공식 48컬럼)")
+            logger.info("[시트] 큐텐업로드 헤더 설정 (공식 50컬럼)")
     except Exception:
         ws.update("A1", [OFFICIAL_HEADERS])
-        logger.info("[시트] 큐텐업로드 헤더 초기화 (공식 48컬럼)")
+        logger.info("[시트] 큐텐업로드 헤더 초기화 (공식 50컬럼)")
 
     # 데이터 행 생성
     rows = []
@@ -457,7 +464,7 @@ def update_upload_sheet(items: list):
             brand_matched += 1
         cat = row[2]  # C열: category_number
         category_dist[cat] = category_dist.get(cat, 0) + 1
-        w = row[33]  # AH열: item_weight
+        w = row[35]  # AJ열: item_weight (인덱스 35)
         weight_dist[w] = weight_dist.get(w, 0) + 1
 
     if rows:
@@ -466,7 +473,7 @@ def update_upload_sheet(items: list):
         ws.update(f"A{next_row}", rows)
 
         top5 = sorted(category_dist.items(), key=lambda x: x[1], reverse=True)[:5]
-        logger.info(f"[시트] 큐텐업로드 {len(rows)}행 추가 (공식 48컬럼)")
+        logger.info(f"[시트] 큐텐업로드 {len(rows)}행 추가 (공식 50컬럼)")
         logger.info(f"[시트] 브랜드 매칭: {brand_matched}/{len(rows)}")
         logger.info(f"[시트] 카테고리 TOP5: {dict(top5)}")
         logger.info(f"[시트] 무게 분포: {dict(weight_dist)}")
@@ -527,7 +534,7 @@ def update_all_sheets(trend_data: dict, scored_items: list,
     logger.info("========== Google Sheets 업데이트 완료 ==========")
     logger.info(f"  트렌드: {len(trend_data.get('sourcing_keywords', []))}행")
     logger.info(f"  소싱후보: {len(scored_items)}행")
-    logger.info(f"  큐텐업로드: {len(final_candidates)}행 (공식 48컬럼)")
+    logger.info(f"  큐텐업로드: {len(final_candidates)}행 (공식 50컬럼)")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -548,7 +555,7 @@ if __name__ == "__main__":
             print(f"시트 연결 성공: {spreadsheet.title}")
             for ws in spreadsheet.worksheets():
                 print(f"  탭: {ws.title} ({ws.row_count}행 × {ws.col_count}열)")
-            print(f"\n큐텐업로드 헤더 수: {len(OFFICIAL_HEADERS)}컬럼 (A~AV)")
+            print(f"\n큐텐업로드 헤더 수: {len(OFFICIAL_HEADERS)}컬럼 (A~AX)")
             print(f"uploader import 상태: {'성공' if _USE_UPLOADER_IMPORT else '폴백'}")
         else:
             print("시트 열기 실패")
