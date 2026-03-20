@@ -1,16 +1,28 @@
 """
 price_calculator.py – 원가 계산 & 판매가 역산 모듈
 Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.7
+Version: 0.8
+
+가격 전략 (v0.8):
+  - 메가와리(-20%) 적용 시에도 마진 25% 확보를 바닥으로 설계
+  - 메가포(-10%) 시 마진 33~37%
+  - 평상시(할인 없음) 마진 40~45%
 
 공식:
   1. 총원가(KRW) = 공급가 + 국내배송비 + 수출신고비(150원)
   2. 총원가(JPY) = 총원가(KRW) / EXCHANGE_RATE
   3. KSE 국제배송비(JPY) = 요율표 lookup + 버퍼(100엔)
   4. 총비용(JPY) = 총원가(JPY) + KSE배송비(JPY)
-  5. 판매가(JPY) = 총비용 / (1 - 목표마진율 - 큐텐수수료율)
+  5. 판매가(JPY) = 총비용 / DIVISOR
+     DIVISOR = (1 - 최대할인율) × (1 - 큐텐수수료율 - 목표마진율)
+             = (1 - 0.20) × (1 - 0.12 - 0.25) = 0.504
   6. 판매가 → 100엔 단위 올림
   7. 실제마진 = 판매가 - 큐텐수수료 - 총비용
+
+마진 시뮬레이션 (원가 1,000엔 기준):
+  - 평상시:   판매가 2,800엔 → 마진 ~38%
+  - 메가포:   결제액 2,520엔 → 마진 ~33%
+  - 메가와리: 결제액 2,240엔 → 마진 ~25%
 """
 
 import json
@@ -20,13 +32,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ── 상수 ──────────────────────────────────────────────────────
-TARGET_MARGIN_RATE  = 0.20      # 목표 마진율 20%
+TARGET_MARGIN_RATE  = 0.25      # 목표 마진율 25% (메가와리 -20% 기준 바닥)
 QOO10_FEE_RATE      = 0.12      # 큐텐 수수료 12%
+MAX_DISCOUNT_RATE   = 0.20      # 메가와리 최대 할인율 20%
 EXCHANGE_RATE       = 10        # 1 JPY = 10 KRW (100 JPY = 1,000 KRW)
 EXPORT_FEE_KRW      = 150       # 수출신고비 (원)
 KSE_BUFFER_JPY      = 100       # 배송비 버퍼 (엔)
 PRICE_ROUND_UNIT    = 100       # 판매가 올림 단위 (엔)
-DIVISOR             = 1 - TARGET_MARGIN_RATE - QOO10_FEE_RATE  # 0.68
+
+# 메가와리 20% 할인 후에도 마진 25% + 수수료 12% 확보
+# 소비자가 × (1 - 0.20) × (1 - 0.12 - 0.25) = 소비자가 × 0.504
+DIVISOR = (1 - MAX_DISCOUNT_RATE) * (1 - QOO10_FEE_RATE - TARGET_MARGIN_RATE)  # 0.504
 
 # ── KSE 요율표 로드 ──────────────────────────────────────────
 _kse_data = None
@@ -120,6 +136,10 @@ def calculate_price(supply_price_krw: int, kj_shipping_krw: int = 3500,
     """
     전체 가격 계산 파이프라인
 
+    가격 전략:
+      - 판매가는 메가와리(-20%) 시에도 마진 25% 확보 기준으로 역산
+      - 평상시 마진 40~45% / 메가포(-10%) 33~37% / 메가와리(-20%) 25%
+
     Args:
         supply_price_krw: 공급가 (원) – KJ9603 회원가
         kj_shipping_krw:  국내배송비 (원) – 기본 3,500원
@@ -135,10 +155,12 @@ def calculate_price(supply_price_krw: int, kj_shipping_krw: int = 3500,
             "total_cost_jpy":       1165,
             "kse_shipping":         { ... },
             "total_landed_jpy":     1725,
-            "sell_price_jpy":       2600,
-            "qoo10_fee_jpy":        312,
-            "margin_jpy":           563,
-            "margin_rate":          0.217,
+            "sell_price_jpy":       3500,
+            "qoo10_fee_jpy":        420,
+            "margin_jpy":           1355,
+            "margin_rate":          0.387,
+            "margin_rate_megapo":   0.337,
+            "margin_rate_megawari": 0.254,
             "is_profitable":        True,
         }
     """
@@ -161,16 +183,29 @@ def calculate_price(supply_price_krw: int, kj_shipping_krw: int = 3500,
     # STEP 4: 총 비용 (JPY)
     total_landed_jpy = total_cost_jpy + kse_fee_jpy
 
-    # STEP 5: 판매가 역산
+    # STEP 5: 판매가 역산 (메가와리 -20% 기준)
     raw_sell_price = total_landed_jpy / DIVISOR
 
     # STEP 6: 100엔 올림
     sell_price_jpy = math.ceil(raw_sell_price / PRICE_ROUND_UNIT) * PRICE_ROUND_UNIT
 
-    # STEP 7: 실제 마진 계산
+    # STEP 7: 실제 마진 계산 (3단계)
+    # 평상시 (할인 없음)
     qoo10_fee_jpy = round(sell_price_jpy * QOO10_FEE_RATE)
     margin_jpy    = sell_price_jpy - qoo10_fee_jpy - total_landed_jpy
     margin_rate   = margin_jpy / sell_price_jpy if sell_price_jpy > 0 else 0
+
+    # 메가포 (-10%)
+    megapo_revenue   = sell_price_jpy * (1 - 0.10)
+    megapo_fee       = round(megapo_revenue * QOO10_FEE_RATE)
+    megapo_margin    = megapo_revenue - megapo_fee - total_landed_jpy
+    margin_rate_megapo = megapo_margin / megapo_revenue if megapo_revenue > 0 else 0
+
+    # 메가와리 (-20%)
+    megawari_revenue = sell_price_jpy * (1 - MAX_DISCOUNT_RATE)
+    megawari_fee     = round(megawari_revenue * QOO10_FEE_RATE)
+    megawari_margin  = megawari_revenue - megawari_fee - total_landed_jpy
+    margin_rate_megawari = megawari_margin / megawari_revenue if megawari_revenue > 0 else 0
 
     return {
         "supply_price_krw":     supply_price_krw,
@@ -186,7 +221,9 @@ def calculate_price(supply_price_krw: int, kj_shipping_krw: int = 3500,
         "qoo10_fee_jpy":        qoo10_fee_jpy,
         "margin_jpy":           round(margin_jpy, 1),
         "margin_rate":          round(margin_rate, 4),
-        "is_profitable":        margin_rate >= TARGET_MARGIN_RATE,
+        "margin_rate_megapo":   round(margin_rate_megapo, 4),
+        "margin_rate_megawari": round(margin_rate_megawari, 4),
+        "is_profitable":        margin_rate_megawari >= TARGET_MARGIN_RATE,
     }
 
 
@@ -226,13 +263,16 @@ def calculate_prices_batch(items: list, category: str = "default") -> list:
         item["is_profitable"] = price_info["is_profitable"]
         item["sell_price_jpy"] = price_info["sell_price_jpy"]
         item["margin_rate"] = price_info["margin_rate"]
+        item["margin_rate_megapo"] = price_info["margin_rate_megapo"]
+        item["margin_rate_megawari"] = price_info["margin_rate_megawari"]
 
         if price_info["is_profitable"]:
             profitable_count += 1
 
         calculated.append(item)
 
-    logger.info(f"[가격계산] {len(items)}건 중 {profitable_count}건 수익성 충족 (마진≥{TARGET_MARGIN_RATE*100}%)")
+    logger.info(f"[가격계산] {len(items)}건 중 {profitable_count}건 수익성 충족 "
+                f"(메가와리 마진≥{TARGET_MARGIN_RATE*100}%)")
     return calculated
 
 
@@ -294,9 +334,10 @@ if __name__ == "__main__":
         {"name": "세럼 (고가)",   "supply": 50000, "shipping": 3500, "category": "세럼/에센스"},
     ]
 
-    print("\n" + "=" * 80)
-    print(f"{'상품명':<16} {'공급가':>8} {'배송비':>6} {'총원가JPY':>9} {'KSE':>5} {'판매가':>7} {'마진':>7} {'마진율':>6} {'결과'}")
-    print("-" * 80)
+    print("\n" + "=" * 100)
+    print(f"{'상품명':<16} {'공급가':>8} {'총비용JPY':>9} {'판매가':>7} "
+          f"{'평상시':>7} {'메가포':>7} {'메가와리':>7} {'결과'}")
+    print("-" * 100)
 
     for tc in test_cases:
         result = calculate_price(
@@ -308,13 +349,14 @@ if __name__ == "__main__":
         print(
             f"{tc['name']:<16} "
             f"{tc['supply']:>7,}원 "
-            f"{tc['shipping']:>5,}원 "
-            f"¥{result['total_cost_jpy']:>7,} "
-            f"¥{result['kse_fee_jpy']:>4,} "
+            f"¥{result['total_landed_jpy']:>7,} "
             f"¥{result['sell_price_jpy']:>6,} "
-            f"¥{result['margin_jpy']:>6,} "
-            f"{result['margin_rate']*100:>5.1f}% "
+            f"{result['margin_rate']*100:>6.1f}% "
+            f"{result['margin_rate_megapo']*100:>6.1f}% "
+            f"{result['margin_rate_megawari']*100:>6.1f}% "
             f"{status}"
         )
 
-    print("=" * 80)
+    print("=" * 100)
+    print(f"\n전략: 메가와리(-20%) 마진 ≥ {TARGET_MARGIN_RATE*100}% | "
+          f"DIVISOR = {DIVISOR} | 수수료 {QOO10_FEE_RATE*100}%")
