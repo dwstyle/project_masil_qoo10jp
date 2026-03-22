@@ -1,7 +1,13 @@
 """
 translator.py – 일본어 번역 & Qoo10 상세페이지 HTML 생성 모듈
 Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.7
+Version: 0.8
+
+변경사항 (v0.7 → v0.8):
+  - yakujiho_filter 연동: 번역 전 한국어 필터 + 번역 후 일본어 필터
+  - build_detail_html에서 header/footer 분리 (product_analyzer.py로 이관)
+  - detail_html은 X열 전용 — 상세 이미지 삽입만 담당
+  - translate_to_japanese, translate_batch에 약기법 2중 필터 적용
 
 번역 전략:
   - Google Cloud Translation API (Basic) 사용
@@ -14,11 +20,21 @@ import os
 import json
 import logging
 import re
+import html as html_module
 
 logger = logging.getLogger(__name__)
 
-# GCP 서비스 계정은 GOOGLE_SERVICE_ACCOUNT_JSON 환경변수로 인증
-# google-cloud-translate 패키지 필요
+# ★ v0.8: 약기법 필터 import
+try:
+    from yakujiho_filter import sanitize_jp, sanitize_kr, sanitize_html
+    YAKUJIHO_ENABLED = True
+    logger.info("[약기법] yakujiho_filter 로드 완료")
+except ImportError:
+    logger.warning("[약기법] yakujiho_filter 모듈 없음 – 필터링 비활성화")
+    YAKUJIHO_ENABLED = False
+    def sanitize_jp(text): return text, [], 0
+    def sanitize_kr(text): return text
+    def sanitize_html(text): return text
 
 
 # ══════════════════════════════════════════════════════════════
@@ -50,7 +66,7 @@ def _get_translate_client():
 
 def translate_to_japanese(text: str, client=None) -> str:
     """
-    한국어 텍스트를 일본어로 번역
+    한국어 텍스트를 일본어로 번역 + 약기법 필터 적용
     Args:
         text: 원본 텍스트 (한국어)
         client: Translation 클라이언트 (없으면 자동 생성)
@@ -59,6 +75,9 @@ def translate_to_japanese(text: str, client=None) -> str:
     """
     if not text or not text.strip():
         return text
+
+    # ★ v0.8: 번역 전 한국어 약기법 필터
+    text = sanitize_kr(text)
 
     if client is None:
         client = _get_translate_client()
@@ -70,8 +89,13 @@ def translate_to_japanese(text: str, client=None) -> str:
     try:
         result = client.translate(text, source_language="ko", target_language="ja")
         translated = result.get("translatedText", text)
-        # HTML 엔티티 디코딩
         translated = _decode_html_entities(translated)
+
+        # ★ v0.8: 번역 후 일본어 약기법 필터
+        translated, footnotes, count = sanitize_jp(translated)
+        if count > 0:
+            logger.info(f"[약기법] 번역 결과에서 {count}건 키워드 치환")
+
         logger.debug(f"[번역] '{text[:30]}' → '{translated[:30]}'")
         return translated
     except Exception as e:
@@ -81,7 +105,7 @@ def translate_to_japanese(text: str, client=None) -> str:
 
 def translate_batch(texts: list, client=None) -> list:
     """
-    여러 텍스트를 일괄 번역 (API 호출 최소화)
+    여러 텍스트를 일괄 번역 + 약기법 필터 (API 호출 최소화)
     Args:
         texts: 한국어 텍스트 리스트
         client: Translation 클라이언트
@@ -90,6 +114,9 @@ def translate_batch(texts: list, client=None) -> list:
     """
     if not texts:
         return []
+
+    # ★ v0.8: 번역 전 한국어 약기법 필터
+    texts = [sanitize_kr(t) for t in texts]
 
     if client is None:
         client = _get_translate_client()
@@ -100,10 +127,16 @@ def translate_batch(texts: list, client=None) -> list:
     try:
         results = client.translate(texts, source_language="ko", target_language="ja")
         translated = []
+        filter_total = 0
         for r in results:
             t = r.get("translatedText", "")
-            translated.append(_decode_html_entities(t))
-        logger.info(f"[번역] {len(texts)}건 일괄 번역 완료")
+            t = _decode_html_entities(t)
+            # ★ v0.8: 번역 후 일본어 약기법 필터
+            t, _, count = sanitize_jp(t)
+            filter_total += count
+            translated.append(t)
+
+        logger.info(f"[번역] {len(texts)}건 일괄 번역 완료 (약기법 {filter_total}건 치환)")
         return translated
     except Exception as e:
         logger.error(f"[번역 일괄] 오류: {e}")
@@ -112,8 +145,7 @@ def translate_batch(texts: list, client=None) -> list:
 
 def _decode_html_entities(text: str) -> str:
     """HTML 엔티티 디코딩"""
-    import html
-    return html.unescape(text)
+    return html_module.unescape(text)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -125,7 +157,7 @@ def translate_product_name(name_kr: str, brand: str = "", client=None) -> str:
     상품명을 큐텐 재팬용으로 번역·최적화
     - 브랜드명은 영문 그대로 유지
     - 한국어 상품 설명만 번역
-    - SEO 키워드 추가 (韓国コスメ 등)
+    - 약기법 금지 키워드 자동 치환
     """
     if not name_kr:
         return ""
@@ -144,7 +176,7 @@ def translate_product_name(name_kr: str, brand: str = "", client=None) -> str:
     for match in re.finditer(pattern, name_part):
         preserved.append(match.group())
 
-    # 한국어 부분만 번역
+    # 한국어 부분만 번역 (약기법 필터 포함)
     translated = translate_to_japanese(name_part, client)
 
     # 브랜드 + 번역 조합
@@ -161,14 +193,14 @@ def translate_product_name(name_kr: str, brand: str = "", client=None) -> str:
 
 
 # ══════════════════════════════════════════════════════════════
-# 3. Qoo10 상세페이지 HTML 생성
+# 3. Qoo10 상세페이지 HTML 생성 ★ v0.8: 경량화
 # ══════════════════════════════════════════════════════════════
 
 def build_detail_html(product: dict, detail_images: list, client=None) -> str:
     """
-    Qoo10 상세페이지용 HTML 생성
-    - 일본어 텍스트 + KJ9603 원본 이미지
-    - 정품보증·배송안내·주의사항 포함
+    ★ v0.8: X열(item_description) 전용
+    header_html(V열)과 footer_html(W열)은 product_analyzer.py가 생성.
+    이 함수는 상세 이미지 삽입만 담당.
 
     Args:
         product: 상품 정보 dict
@@ -177,102 +209,30 @@ def build_detail_html(product: dict, detail_images: list, client=None) -> str:
     Returns:
         HTML 문자열
     """
-    # 상품명 번역
-    name_kr = product.get("name", "")
-    brand = product.get("brand", "")
-    name_jp = translate_product_name(name_kr, brand, client)
-
-    # 카테고리 번역
-    category = product.get("category", "")
-    category_jp = _category_kr_to_jp(category)
+    # 상품명 (이미 번역된 게 있으면 사용)
+    name_jp = product.get("name_jp", "")
+    if not name_jp:
+        name_kr = product.get("name", "")
+        brand = product.get("brand", "")
+        name_jp = translate_product_name(name_kr, brand, client)
 
     # 이미지 태그 생성
     img_tags = ""
     for url in detail_images:
-        img_tags += f'      <img src="{url}" width="750" style="max-width:100%; height:auto; display:block; margin:0 auto 10px auto;" alt="{name_jp}">\n'
+        img_tags += (
+            f'  <img src="{url}" width="750" '
+            f'style="max-width:100%; height:auto; display:block; margin:0 auto 10px auto;" '
+            f'alt="{name_jp}">\n'
+        )
 
-    # HTML 조립
-    html = f"""<div style="text-align:center; font-family:'Hiragino Sans','Meiryo',sans-serif; max-width:750px; margin:0 auto; padding:10px; color:#333;">
-
-  <!-- 헤더 -->
-  <div style="background:#f8f8f8; padding:20px; border-radius:8px; margin-bottom:20px;">
-    <h2 style="font-size:20px; margin:0 0 10px 0; color:#222;">{name_jp}</h2>
-    <p style="font-size:14px; color:#888; margin:5px 0;">🇰🇷 韓国コスメ ｜ {category_jp}</p>
-  </div>
-
-  <!-- 정품보증 배너 -->
-  <div style="background:#fff3cd; padding:12px; border-radius:6px; margin-bottom:20px; border:1px solid #ffc107;">
-    <p style="font-size:14px; margin:0; color:#856404;">
-      ✅ <strong>正規品100%保証</strong> ｜ 韓国メーカー正規取引先から直接仕入れ
-    </p>
-  </div>
-
-  <!-- 商品情報 -->
-  <div style="text-align:left; padding:15px; background:#fafafa; border-radius:6px; margin-bottom:20px;">
-    <table style="width:100%; font-size:13px; border-collapse:collapse;">
-      <tr>
-        <td style="padding:8px; border-bottom:1px solid #eee; width:30%; color:#666;">ブランド</td>
-        <td style="padding:8px; border-bottom:1px solid #eee;">{brand or name_kr[:20]}</td>
-      </tr>
-      <tr>
-        <td style="padding:8px; border-bottom:1px solid #eee; color:#666;">原産国</td>
-        <td style="padding:8px; border-bottom:1px solid #eee;">韓国 🇰🇷</td>
-      </tr>
-      <tr>
-        <td style="padding:8px; border-bottom:1px solid #eee; color:#666;">カテゴリー</td>
-        <td style="padding:8px; border-bottom:1px solid #eee;">{category_jp}</td>
-      </tr>
-      <tr>
-        <td style="padding:8px; color:#666;">商品タイプ</td>
-        <td style="padding:8px;">韓国コスメ</td>
-      </tr>
-    </table>
-  </div>
-
-  <!-- 구분선 -->
-  <hr style="border:none; border-top:2px solid #e0e0e0; margin:25px 0;">
-
-  <!-- 상세 이미지 -->
-  <div style="margin-bottom:25px;">
+    html_content = f"""<div style="text-align:center; max-width:750px; margin:0 auto;">
 {img_tags}
-  </div>
-
-  <!-- 구분선 -->
-  <hr style="border:none; border-top:2px solid #e0e0e0; margin:25px 0;">
-
-  <!-- 배송 안내 -->
-  <div style="text-align:left; padding:15px; background:#e8f5e9; border-radius:6px; margin-bottom:15px;">
-    <p style="font-size:15px; font-weight:bold; margin:0 0 8px 0; color:#2e7d32;">📦 配送について</p>
-    <ul style="font-size:13px; color:#555; margin:0; padding-left:20px; line-height:1.8;">
-      <li>韓国から直接発送いたします</li>
-      <li>発送後 3〜7営業日でお届け（税関状況により前後する場合があります）</li>
-      <li>送料無料</li>
-      <li>追跡番号は発送後にご案内いたします</li>
-    </ul>
-  </div>
-
-  <!-- 주의사항 -->
-  <div style="text-align:left; padding:15px; background:#fff8e1; border-radius:6px; margin-bottom:15px;">
-    <p style="font-size:15px; font-weight:bold; margin:0 0 8px 0; color:#f57f17;">⚠️ ご注意事項</p>
-    <ul style="font-size:12px; color:#666; margin:0; padding-left:20px; line-height:1.8;">
-      <li>海外発送商品のため、お届けまでに通常より日数がかかる場合があります</li>
-      <li>パッケージデザインは予告なく変更される場合があります</li>
-      <li>商品説明の一部に韓国語表記が含まれる場合があります</li>
-      <li>お客様都合による返品・交換はお受けできない場合があります</li>
-      <li>個人輸入品として税関で課税される場合、お客様のご負担となります</li>
-    </ul>
-  </div>
-
-  <!-- 판매자 정보 -->
-  <div style="text-align:center; padding:15px; background:#f5f5f5; border-radius:6px; margin-top:20px;">
-    <p style="font-size:12px; color:#999; margin:0;">
-      Plan B Cabinet ｜ 韓国正規取引先からの直送品
-    </p>
-  </div>
-
 </div>"""
 
-    return html
+    # ★ v0.8: 약기법 필터 적용 (이미지 alt 텍스트 등)
+    html_content = sanitize_html(html_content)
+
+    return html_content
 
 
 # ══════════════════════════════════════════════════════════════
@@ -305,7 +265,7 @@ def translate_items_batch(items: list) -> list:
     if not valid_names:
         return items
 
-    # 일괄 번역 (50개씩 청크)
+    # 일괄 번역 (50개씩 청크) — 약기법 필터 포함
     chunk_size = 50
     all_translated = []
     for i in range(0, len(valid_names), chunk_size):
@@ -325,7 +285,7 @@ def translate_items_batch(items: list) -> list:
         if "name_jp" not in item:
             item["name_jp"] = item.get("name", "")
 
-    logger.info(f"[번역] {len(valid_names)}건 상품명 번역 완료")
+    logger.info(f"[번역] {len(valid_names)}건 상품명 번역 완료 (약기법 필터 적용)")
     return items
 
 
@@ -345,11 +305,11 @@ def generate_detail_html_batch(items: list) -> list:
             item["detail_html"] = ""
             continue
 
-        html = build_detail_html(item, detail_images, client)
-        item["detail_html"] = html
+        item_html = build_detail_html(item, detail_images, client)
+        item["detail_html"] = item_html
 
     generated = sum(1 for item in items if item.get("detail_html"))
-    logger.info(f"[HTML] {generated}/{len(items)}건 상세페이지 생성 완료")
+    logger.info(f"[HTML] {generated}/{len(items)}건 상세페이지 생성 완료 (약기법 필터 적용)")
     return items
 
 
@@ -392,9 +352,23 @@ def _category_kr_to_jp(category_kr: str) -> str:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+    # 약기법 필터 테스트 (번역 없이)
+    print("=== 약기법 필터 테스트 ===")
+    test_kr_words = [
+        "안티에이징 주름개선 미백 크림",
+        "화이트닝 톤업 세럼",
+        "여드름치료 디톡스 마스크",
+    ]
+    for word in test_kr_words:
+        filtered = sanitize_kr(word)
+        print(f"  KR: '{word}' → '{filtered}'")
+
+    print()
+
     # HTML 생성 테스트 (번역 없이 구조 확인)
     test_product = {
         "name": "어성초 77% 수딩 토너 250ml",
+        "name_jp": "【ANUA】ドクダミ77% スージングトナー 250ml",
         "brand": "ANUA",
         "category": "토너/스킨",
     }
@@ -404,8 +378,9 @@ if __name__ == "__main__":
         "https://kmclubb2b.com/home/data/editor/2026/01/27/kbm-d5-3.jpg",
     ]
 
-    html = build_detail_html(test_product, test_images)
-    print("HTML 생성 완료!")
-    print(f"HTML 길이: {len(html)}자")
+    detail_html = build_detail_html(test_product, test_images)
+    print("=== Detail HTML 생성 완료 ===")
+    print(f"HTML 길이: {len(detail_html)}자")
+    print(f"약기법 필터 활성화: {YAKUJIHO_ENABLED}")
     print("\n--- HTML 미리보기 (앞 500자) ---")
-    print(html[:500])
+    print(detail_html[:500])
