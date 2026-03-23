@@ -457,6 +457,50 @@ def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None
     # 조립
     html = f"""<div style="text-align:center; font-family:'Hiragino Sans','Meiryo',sans-serif; max-width:750px; margin:0 auto; padding:10px; color:#333;">
 
+  <!-- 브랜드 배너 -->
+  <div style="background:linear-gradient(135deg, #1a1a1a, #333); padding:18px; border-radius:8px; margin-bottom:15px;">
+    <p style="font-size:18px; margin:0 0 5px 0; color:#c9a96e; font-weight:bold;">Plan B Cabinet</p>
+    <p style="font-size:12px; margin:0; color:#ccc;">韓国トレンドコスメ × プレミアムファッション</p>
+  </div>
+
+  <!-- LINE 유도 -->
+  <div style="background:#06C755; padding:10px; border-radius:6px; margin-bottom:15px;">
+    <p style="font-size:13px; margin:0; color:#fff; font-weight:bold;">
+      📱 LINE友だち追加で200円クーポン → <span style="text-decoration:underline;">@planbasap</span>
+    </p>
+  </div>
+
+  <!-- 상품명 헤더 -->
+  <div style="background:#fdfbf9; padding:20px; border-radius:8px; margin-bottom:15px; border:1px solid #efe8dd;">
+    <h2 style="font-size:20px; margin:0 0 8px 0; color:#1a1a1a;">{name_jp}</h2>
+    <p style="font-size:14px; color:#888; margin:5px 0;">🇰🇷 {brand}{volume_text} ｜ 韓国コスメ</p>
+    {{'<p style="font-size:15px; color:#c9a96e; font-weight:bold; margin:10px 0 0 0;">' + headline + '</p>' if headline else ''}}
+  </div>
+
+  <!-- 정품보증 배너 -->
+  <div style="background:linear-gradient(135deg, #c9a96e, #d4b87a); padding:12px; border-radius:6px; margin-bottom:15px;">
+    <p style="font-size:14px; margin:0; color:#fff; font-weight:bold;">
+      ✅ 正規品100%保証 ｜ 全品送料無料 ｜ 韓国直送 3〜7日
+    </p>
+  </div>
+
+{oy_badge}
+{cert_badge}
+{points_html}
+{recommend_html}
+{ingredients_html}
+{usage_html}
+
+  <!-- 이미지 안내 -->
+  <div style="padding:10px; margin-bottom:15px;">
+    <p style="font-size:12px; color:#999;">▼ 商品の詳細ページ（韓国語原本）▼</p>
+  </div>
+
+  <!-- 구분선 -->
+  <hr style="border:none; border-top:2px solid #efe8dd; margin:10px 0 20px 0;">
+
+</div>"""
+
   <!-- 상품명 헤더 -->
   <div style="background:#fdfbf9; padding:20px; border-radius:8px; margin-bottom:15px; border:1px solid #efe8dd;">
     <h2 style="font-size:20px; margin:0 0 8px 0; color:#1a1a1a;">{name_jp}</h2>
