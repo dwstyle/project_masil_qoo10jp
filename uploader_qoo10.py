@@ -389,58 +389,58 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         footer_html = item.get("footer_html", "")
 
         # ── 50컬럼 행 데이터 (A~AX) ──
-        row_data = [
-            "",                                                    # A  item_number
-            f"KJ{item.get('product_id', '') or item.get('item_id', '')}",  # B  seller_unique_item_id
-            qoo10_cat,                                             # C  category_number
-            qoo10_brand,                                           # D  brand_number
-            item_name,                                             # E  item_name
-            "韓国コスメ 正規品",                                     # F  item_promotion_name
-            "Y",                                                   # G  item_status
-            "",                                                    # H  start_date (공란=즉시)  ★ v0.9.1
-            "2030-12-31",                                          # I  end_date               ★ v0.9.1
-            sell_price,                                            # J  price_yen
-            retail_price,                                          # K  retail_price_yen
-            "",                                                    # L  taxrate (공란=기본)     ★ v0.9.1
-            100,                                                   # M  quantity
-            option_str,                                            # N  option_info
-            "",                                                    # O  additional_option_info
-            "",                                                    # P  additional_option_text
-            thumbnail,                                             # Q  image_main_url
-            other_images,                                          # R  image_other_url
-            "",                                                    # S  video_url
-            "",                                                    # T  image_option_info
-            "",                                                    # U  image_additional_option_info
-            header_html,                                           # V  header_html  ★ v0.9.2
-            footer_html,                                           # W  footer_html  ★ v0.9.2
-            item.get("detail_html", ""),                           # X  item_description
-            QOO10_KSE_SHIPPING_CODE,                               # Y  Shipping_number
-            "",                                                    # Z  option_number
-            "3",                                                   # AA available_shipping_date ★ v0.9.1
-            "7",                                                   # AB desired_shipping_date
-            search_kw,                                             # AC search_keyword
-            "1",                                                   # AD item_condition_type (신품)
-            "2",                                                   # AE origin_type (해외)
-            "",                                                    # AF origin_region_id
-            "KR",                                                  # AG origin_country_id
-            "",                                                    # AH origin_others
-            "",                                                    # AI medication_type
-            str(weight),                                           # AJ item_weight
-            "",                                                    # AK item_material
-            "",                                                    # AL model_name
-            "",                                                    # AM external_product_type
-            "",                                                    # AN external_product_id
-            "",                                                    # AO manufacture_date
-            "",                                                    # AP expiration_date_type
-            "",                                                    # AQ expiration_date_MFD
-            "",                                                    # AR expiration_date_PAO
-            "",                                                    # AS expiration_date_EXP
-            "N",                                                   # AT under18s_display
-            "",                                                    # AU A/S_info
-            "",                                                    # AV buy_limit_type
-            "",                                                    # AW buy_limit_date
-            "",                                                    # AX buy_limit_qty
-        ]
+        row = [
+            '',                              # A  item_number (신규→공란)
+            f'KJ{seller_id}',               # B  seller_unique_item_id
+            str(cat_code),                   # C  category_number
+            str(brand_code),                 # D  brand_number
+            item_name,                       # E  item_name
+            '韓国コスメ 正規品',               # F  item_promotion_name
+            'Y',                             # G  item_status
+            '',                              # H  start_date
+            '2030-12-31',                    # I  end_date
+            str(price),                      # J  price_yen
+            str(retail_price),               # K  retail_price_yen
+            '',                              # L  taxrate
+            '100',                           # M  quantity
+            option_str,                      # N  option_info
+            '',                              # O  additional_option_info
+            '',                              # P  additional_option_text
+            item.get('thumbnail_processed', '') or main_image,  # Q  ★ 변경: 가공 썸네일 우선
+            other_images,                    # R  image_other_url
+            '',                              # S  video_url
+            '',                              # T  image_option_info
+            '',                              # U  image_additional_option_info
+            item.get('header_html', ''),     # V  ★ 변경: 상품 분석 마케팅 요약
+            item.get('footer_html', ''),     # W  ★ 변경: 공통 하단 템플릿
+            detail_html,                     # X  item_description
+            QOO10_KSE_SHIPPING_CODE,         # Y  Shipping_number
+            '',                              # Z  option_number
+            '3',                             # AA available_shipping_date
+            '7',                             # AB desired_shipping_date
+            search_kw,                       # AC search_keyword
+            '1',                             # AD item_condition_type
+            '2',                             # AE origin_type
+            '',                              # AF origin_region_id
+            'KR',                            # AG origin_country_id
+            '',                              # AH origin_others
+            '',                              # AI medication_type
+            str(weight),                     # AJ item_weight
+            '',                              # AK item_material
+            '',                              # AL model_name
+            '',                              # AM external_product_type
+            '',                              # AN external_product_id
+            '',                              # AO manufacture_date
+            '',                              # AP expiration_date_type
+            '',                              # AQ expiration_date_MFD
+            '',                              # AR expiration_date_PAO
+            '',                              # AS expiration_date_EXP
+            'N',                             # AT under18s_display
+            '',                              # AU A/S_info
+            '',                              # AV buy_limit_type
+            '',                              # AW buy_limit_date
+            '',                              # AX buy_limit_qty
+        ]   
 
         for col, value in enumerate(row_data, 1):
             ws.cell(row=row_idx, column=col, value=value)

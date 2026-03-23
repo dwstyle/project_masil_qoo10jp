@@ -11,6 +11,18 @@ import json
 import logging
 from datetime import datetime
 
+try:
+    from product_analyzer import analyze_and_build_html_batch
+except ImportError as e:
+    logger.warning(f"product_analyzer import 실패: {e}")
+    analyze_and_build_html_batch = None
+
+try:
+    from thumbnail_processor import process_thumbnails_batch
+except ImportError as e:
+    logger.warning(f"thumbnail_processor import 실패: {e}")
+    process_thumbnails_batch = None
+
 # ═══════════════════════════════════════════════
 # 로깅 설정
 # ═══════════════════════════════════════════════
@@ -341,9 +353,9 @@ def phase_c(phase_b_result, phase_a_result=None):
 # PHASE D: 번역·출품
 # ═══════════════════════════════════════════════
 def phase_d(phase_a_result, phase_b_result, phase_c_result):
-    """PHASE D: 번역 + Sheets 업데이트 + Excel 생성 + Drive 업로드"""
+    """PHASE D: 번역 + 상품분석 + 썸네일 + Sheets 업데이트 + Excel 생성"""
     logger.info("=" * 60)
-    logger.info("PHASE D: 번역·출품 시작")
+    logger.info("PHASE D: 번역·분석·출품 시작")
     logger.info("=" * 60)
 
     final_candidates = phase_c_result.get("final_candidates", [])
@@ -358,11 +370,39 @@ def phase_d(phase_a_result, phase_b_result, phase_c_result):
                 logger.info(f"── PHASE D1: 일본어 번역 ({len(final_candidates)}건) ──")
                 translate_items_batch(final_candidates)
                 generate_detail_html_batch(final_candidates)
-                logger.info("번역 완료")
+                logger.info("D1 번역 완료")
             except Exception as e:
                 logger.error(f"D1 번역 오류: {e}")
         else:
             logger.warning("D1 스킵: translator 모듈 없음")
+
+        # ── D1.5: 상품 분석 (Gemini) + 마케팅 요약 HTML 생성 ──
+        if analyze_and_build_html_batch:
+            try:
+                logger.info(f"── PHASE D1.5: 상품 분석 + HTML 생성 ({len(final_candidates)}건) ──")
+                analyze_and_build_html_batch(final_candidates)
+                # 결과 확인
+                has_header = sum(1 for i in final_candidates if i.get('header_html'))
+                has_footer = sum(1 for i in final_candidates if i.get('footer_html'))
+                logger.info(f"D1.5 완료: header_html {has_header}건, footer_html {has_footer}건 생성")
+            except Exception as e:
+                logger.error(f"D1.5 상품 분석 오류: {e}")
+                logger.info("D1.5 실패 — header/footer 없이 계속 진행")
+        else:
+            logger.warning("D1.5 스킵: product_analyzer 모듈 없음")
+
+        # ── D1.7: 썸네일 생성 (배경 제거 + 배지) ──
+        if process_thumbnails_batch:
+            try:
+                logger.info(f"── PHASE D1.7: 썸네일 생성 ({len(final_candidates)}건) ──")
+                process_thumbnails_batch(final_candidates)
+                has_thumb = sum(1 for i in final_candidates if i.get('thumbnail_processed'))
+                logger.info(f"D1.7 완료: 썸네일 {has_thumb}건 생성")
+            except Exception as e:
+                logger.error(f"D1.7 썸네일 생성 오류: {e}")
+                logger.info("D1.7 실패 — 원본 썸네일로 계속 진행")
+        else:
+            logger.warning("D1.7 스킵: thumbnail_processor 모듈 없음")
 
     # ── D2: Google Sheets 업데이트 (후보 유무 관계없이 실행) ──
     if update_all_sheets:
@@ -379,7 +419,7 @@ def phase_d(phase_a_result, phase_b_result, phase_c_result):
                     "phase_c": {"candidates": len(final_candidates)},
                 },
             )
-            logger.info("Sheets 업데이트 완료")
+            logger.info("D2 Sheets 업데이트 완료")
         except Exception as e:
             logger.error(f"D2 Sheets 오류: {e}")
     else:
@@ -391,7 +431,7 @@ def phase_d(phase_a_result, phase_b_result, phase_c_result):
             logger.info(f"── PHASE D3: Excel 생성 & 업로드 ({len(final_candidates)}건) ──")
             upload_result = generate_and_upload(final_candidates)
             upload_url = upload_result.get("drive_url") if upload_result else None
-            logger.info(f"업로드 완료: {upload_url}")
+            logger.info(f"D3 업로드 완료: {upload_url}")
         except Exception as e:
             logger.error(f"D3 업로드 오류: {e}")
     else:
@@ -401,7 +441,6 @@ def phase_d(phase_a_result, phase_b_result, phase_c_result):
             logger.warning("D3 스킵: uploader_qoo10 모듈 없음")
 
     return {"upload_url": upload_url}
-
 
 # ═══════════════════════════════════════════════
 # 파이프라인 실행 & 리포트
