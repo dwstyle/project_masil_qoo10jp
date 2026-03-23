@@ -429,7 +429,7 @@ def generate_qoo10_excel(items: list) -> BytesIO:
 # ══════════════════════════════════════════════════════════════
 
 def upload_to_drive(excel_bytes: BytesIO, filename: str) -> str:
-    """엑셀 파일을 Google Drive에 업로드 (실패 시 로컬 저장)"""
+    """엑셀 파일을 Google Drive에 업로드 (실패 시 빈 문자열 반환)"""
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
@@ -457,16 +457,8 @@ def upload_to_drive(excel_bytes: BytesIO, filename: str) -> str:
         return file.get("webViewLink", f"https://drive.google.com/file/d/{file.get('id')}")
 
     except Exception as e:
-        logger.warning(f"[Drive] 업로드 실패: {e} – 로컬 저장 시도")
-        try:
-            local_path = f"/tmp/{filename}"
-            excel_bytes.seek(0)
-            with open(local_path, "wb") as f:
-                f.write(excel_bytes.read())
-            return f"LOCAL:{local_path}"
-        except Exception as e2:
-            logger.error(f"[Drive] 로컬 저장도 실패: {e2}")
-            return ""
+        logger.warning(f"[Drive] 업로드 실패: {e}")
+        return ""
 
 
 # ══════════════════════════════════════════════════════════════
@@ -474,7 +466,7 @@ def upload_to_drive(excel_bytes: BytesIO, filename: str) -> str:
 # ══════════════════════════════════════════════════════════════
 
 def generate_and_upload(items: list) -> dict:
-    """최종 통과 상품 → 엑셀 생성 → Drive 업로드 (실패 시 로컬 저장)"""
+    """최종 통과 상품 → 엑셀 생성 → Drive 업로드 (항상 artifacts에도 저장)"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"qoo10_upload_{timestamp}.xlsx"
 
@@ -482,24 +474,33 @@ def generate_and_upload(items: list) -> dict:
     if excel_bytes is None:
         return {"item_count": 0, "filename": "", "drive_url": "", "success": False}
 
+    # ── 항상 artifacts/ 에 로컬 저장 (GitHub Actions Artifacts 다운로드용) ──
+    os.makedirs("artifacts", exist_ok=True)
+    local_path = f"artifacts/{filename}"
+    excel_bytes.seek(0)
+    with open(local_path, "wb") as f:
+        f.write(excel_bytes.read())
+    logger.info(f"[저장] artifacts 로컬 저장 완료: {local_path}")
+
+    # ── Drive 업로드 시도 ──
+    excel_bytes.seek(0)
     drive_url = upload_to_drive(excel_bytes, filename)
-    is_local = drive_url.startswith("LOCAL:") if drive_url else False
+    is_local = not drive_url or drive_url.startswith("LOCAL:")
 
     result = {
         "item_count": len(items),
         "filename": filename,
-        "drive_url": drive_url,
-        "success": bool(drive_url),
+        "drive_url": drive_url if not is_local else "",
+        "local_path": local_path,
+        "success": True,
         "is_local": is_local,
     }
 
     if drive_url and not is_local:
         logger.info(f"[업로드] Drive 성공: {len(items)}건 → {drive_url}")
-    elif is_local:
-        logger.info(f"[업로드] 로컬 저장: {len(items)}건 → {drive_url}")
-        logger.info("[업로드] GitHub Actions Artifacts 탭에서 다운로드 가능")
+        logger.info(f"[업로드] artifacts 백업: {local_path}")
     else:
-        logger.error("[업로드] 실패: 엑셀 생성 또는 저장 에러")
+        logger.info(f"[업로드] Drive 스킵/실패 → GitHub Actions Artifacts 탭에서 다운로드: {local_path}")
 
     return result
 
