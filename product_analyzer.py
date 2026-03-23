@@ -494,7 +494,7 @@ def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None
             '  <!-- 마케팅 메시지 -->\n'
             '  <div style="background:linear-gradient(135deg, #ff6b6b, #ee5a24); padding:14px; border-radius:6px; margin-bottom:15px;">\n'
             '    <p style="font-size:15px; margin:0; color:#fff; font-weight:bold;">\n'
-            f'      🔥 {marketing_message}\n'
+            '      🔥 ' + marketing_message + '\n'
             '    </p>\n'
             '  </div>'
         )
@@ -503,21 +503,21 @@ def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None
     social_proof_html = ""
     social_parts = []
     if review_highlight:
-        social_parts.append(f'💬 "{review_highlight}"')
+        social_parts.append('💬 "' + review_highlight + '"')
     if texture_jp:
-        social_parts.append(f'🫧 {texture_jp}')
+        social_parts.append('🫧 ' + texture_jp)
     if reviews_summary and not review_highlight:
-        social_parts.append(f'💬 {reviews_summary}')
+        social_parts.append('💬 ' + reviews_summary)
 
     if social_parts:
         items_str = ""
         for sp in social_parts:
-            items_str += f'    <p style="font-size:13px; color:#555; margin:5px 0;">{sp}</p>\n'
+            items_str += '    <p style="font-size:13px; color:#555; margin:5px 0;">' + sp + '</p>\n'
         social_proof_html = (
             '  <!-- 리뷰/사용감 -->\n'
             '  <div style="text-align:left; padding:15px; background:#f0f4f8; border-radius:6px; margin-bottom:15px; border-left:4px solid #5b9bd5;">\n'
             '    <p style="font-size:14px; font-weight:bold; margin:0 0 8px 0; color:#2c3e50;">📣 リアルな声</p>\n'
-            f'{items_str}'
+            + items_str +
             '  </div>'
         )
 

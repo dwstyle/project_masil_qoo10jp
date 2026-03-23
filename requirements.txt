@@ -25,4 +25,4 @@ openpyxl>=3.1.0
 
 # 이미지 처리  ★ v0.9.2
 Pillow>=10.0.0
-rembg>=2.0.50
+rembg[cpu]>=2.0.50

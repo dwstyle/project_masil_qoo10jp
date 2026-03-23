@@ -43,6 +43,7 @@ jobs:
           QOO10_KSE_SHIPPING_CODE: ${{ secrets.QOO10_KSE_SHIPPING_CODE }}
           NAVER_CLIENT_ID_QOO10: ${{ secrets.NAVER_CLIENT_ID_QOO10 }}
           NAVER_CLIENT_SECRET_QOO10: ${{ secrets.NAVER_CLIENT_SECRET_QOO10 }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python main_qoo10.py
 
