@@ -46,6 +46,15 @@ jobs:
         run: |
           python main_qoo10.py
 
+      - name: Auto-commit registered_codes.json
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add registered_codes.json
+          git diff --cached --quiet || git commit -m "chore: update registered_codes.json [skip ci]"
+          git push || echo "Push failed — will retry next run"
+
       - name: Upload Qoo10 Excel Artifact
         if: always()
         uses: actions/upload-artifact@v5

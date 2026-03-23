@@ -17,6 +17,7 @@ Version: 0.9.2
   - 배송기간 3일 통일 (v0.9.1)
 """
 
+import json
 import math
 import logging
 import os
@@ -265,6 +266,52 @@ def _extract_search_keywords(item: dict, category: str = "") -> str:
 # ══════════════════════════════════════════════════════════════
 
 def generate_qoo10_excel(items: list) -> BytesIO:
+    # ── 기존 등록 상품 제외 ──
+    registered = _load_registered_codes()
+    if registered:
+        before = len(items)
+        items = [i for i in items if
+                 f"KJ{i.get('item_id', '') or i.get('product_id', '')}" not in registered]
+        skipped = before - len(items)
+        if skipped:
+            logger.info(f"[기존제외] {before}건 → {len(items)}건 (기존 등록 {skipped}건 제외)")
+
+    if not items:
+        logger.warning("[결과] 신규 상품 0건 — 엑셀 생성 스킵")
+        return None
+
+    # ── 이하 기존 코드 그대로 ──
+
+def _load_registered_codes() -> set:
+    """기존 Qoo10 등록 상품코드 로드"""
+    try:
+        with open("registered_codes.json", "r") as f:
+            codes = set(json.load(f))
+            logger.info(f"[등록코드] {len(codes)}건 로드")
+            return codes
+    except FileNotFoundError:
+        logger.info("[등록코드] registered_codes.json 없음 — 첫 실행으로 간주")
+        return set()
+    except Exception as e:
+        logger.warning(f"[등록코드] 로드 실패: {e} — 필터 스킵")
+        return set()
+
+
+def _save_registered_codes(new_codes: list):
+    """신규 등록 코드를 registered_codes.json에 추가"""
+    existing = set()
+    try:
+        with open("registered_codes.json", "r") as f:
+            existing = set(json.load(f))
+    except FileNotFoundError:
+        pass
+
+    updated = sorted(existing | set(new_codes))
+    with open("registered_codes.json", "w") as f:
+        json.dump(updated, f, indent=2, ensure_ascii=False)
+    logger.info(f"[등록코드] {len(new_codes)}건 추가 → 총 {len(updated)}건 저장")
+
+def generate_qoo10_excel(items: list) -> BytesIO:
     """Qoo10 J·QSM 대량등록용 엑셀 파일 생성 (공식 50컬럼)"""
     try:
         import openpyxl
@@ -481,6 +528,15 @@ def generate_and_upload(items: list) -> dict:
     with open(local_path, "wb") as f:
         f.write(excel_bytes.read())
     logger.info(f"[저장] artifacts 로컬 저장 완료: {local_path}")
+
+    # ── 업로드한 seller_code를 registered_codes.json에 자동 추가 ──
+    new_codes = [
+        f"KJ{i.get('item_id', '') or i.get('product_id', '')}"
+        for i in items
+        if i.get('item_id') or i.get('product_id')
+    ]
+    if new_codes:
+        _save_registered_codes(new_codes)
 
     # ── Drive 업로드 시도 ──
     excel_bytes.seek(0)
