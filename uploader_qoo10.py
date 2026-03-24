@@ -1,20 +1,24 @@
 """
 uploader_qoo10.py – Qoo10 J·QSM 대량등록용 엑셀 생성 & Drive 업로드
 Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.9.2
+Version: 0.9.3
 
-변경사항 (v0.9.1 → v0.9.2):
-  - V열(header_html): item dict에서 읽기 (product_analyzer.py가 생성)
-  - W열(footer_html): item dict에서 읽기 (product_analyzer.py가 생성)
+변경사항 (v0.9.2 → v0.9.3):
+  - [BUG FIX] seller_id NameError 수정 → item.get('item_id') 사용
+  - [BUG FIX] cat_code → qoo10_cat, brand_code → qoo10_brand, price → sell_price 등 변수명 통일
+  - [BUG FIX] main_image → thumbnail, detail_html → item.get('detail_html','')
+  - [BUG FIX] row vs row_data 변수명 통일
+  - [BUG FIX] generate_qoo10_excel 함수 중복 정의 → 하나로 통합 (등록코드 제외 로직 포함)
+
+기존 유지 (v0.9.2):
+  - V열(header_html): item dict에서 읽기
+  - W열(footer_html): item dict에서 읽기
   - AC열(search_keyword): 약기법 금지 키워드 자동 필터링
-  - yakujiho_filter 모듈 연동
-
-기존 유지:
   - 공식 50컬럼 (A~AX) 구조
-  - 구분자 $$ (v0.9.1)
-  - 상품명 홍보문구 제거 + 50자 제한 (v0.9.1)
-  - 검색키워드 30자 제한 (v0.9.1)
-  - 배송기간 3일 통일 (v0.9.1)
+  - 구분자 $$
+  - 상품명 홍보문구 제거 + 50자 제한
+  - 검색키워드 30자 제한
+  - 배송기간 3일 통일
 """
 
 import json
@@ -27,7 +31,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# ★ v0.9.2: 약기법 필터 import
+# ★ 약기법 필터 import
 try:
     from yakujiho_filter import sanitize_jp
     YAKUJIHO_ENABLED = True
@@ -35,11 +39,12 @@ try:
 except ImportError:
     logger.warning("[약기법] yakujiho_filter 모듈 없음 – 필터링 비활성화")
     YAKUJIHO_ENABLED = False
-    def sanitize_jp(text): return text, [], 0
+    def sanitize_jp(text):
+        return text, [], 0
 
 
 # ── 상수 ──────────────────────────────────────────────────────
-QOO10_KSE_SHIPPING_CODE = "KSE01"  # KSE 배송 코드
+QOO10_KSE_SHIPPING_CODE = "KSE01"
 
 # 공식 50컬럼 헤더 (A~AX)
 OFFICIAL_HEADERS = [
@@ -120,7 +125,7 @@ CATEGORY_MAP = {
     "뷰티툴": "100000044",
     "세트/키트": "100000043",
 }
-DEFAULT_CATEGORY = "100000043"  # 스킨케어 기본
+DEFAULT_CATEGORY = "100000043"
 
 # ── 브랜드 매핑 ──────────────────────────────────────────────
 BRAND_MAP = {
@@ -143,11 +148,11 @@ BRAND_MAP = {
 
 # ── 무게 매핑 ────────────────────────────────────────────────
 WEIGHT_MAP = {
-    "100000043": 300,   # 스킨케어
-    "100000044": 200,   # 메이크업
-    "100000045": 200,   # 향수
-    "100000046": 400,   # 헤어케어
-    "100000047": 350,   # 바디케어
+    "100000043": 300,
+    "100000044": 200,
+    "100000045": 200,
+    "100000046": 400,
+    "100000047": 350,
 }
 DEFAULT_WEIGHT = 300
 
@@ -185,20 +190,15 @@ def _get_item_weight(category_code: str) -> int:
 
 
 def _truncate_item_name(name: str, max_len: int = 50) -> str:
-    """
-    ★ v0.9.1: 상품명에서 홍보 문구 제거 후 길이 제한
-    """
+    """상품명에서 홍보 문구 제거 후 길이 제한"""
     if not name:
         return ""
 
-    # 금지 키워드 제거
     for word in FORBIDDEN_PROMO_WORDS:
         name = name.replace(word, "")
 
-    # 연속 공백 정리
     name = re.sub(r'\s+', ' ', name).strip()
 
-    # 길이 제한
     if len(name) > max_len:
         name = name[:max_len - 1] + "…"
 
@@ -206,28 +206,20 @@ def _truncate_item_name(name: str, max_len: int = 50) -> str:
 
 
 def _extract_search_keywords(item: dict, category: str = "") -> str:
-    """
-    검색 키워드 추출 (30자 제한)
-    ★ v0.9.2: 약기법 금지 키워드 자동 필터링
-    """
+    """검색 키워드 추출 (30자 제한, 약기법 필터 포함)"""
     keywords = []
 
-    # 브랜드명
     brand = item.get("brand", "")
     if brand:
         keywords.append(brand)
 
-    # 상품명에서 키워드 추출
     name_jp = item.get("name_jp", item.get("name", ""))
     if name_jp:
-        # 【】 내 브랜드명 제거
         clean_name = re.sub(r'【.*?】', '', name_jp).strip()
-        # 숫자+단위 제거 (250ml 등)
         clean_name = re.sub(r'\d+\s*(?:ml|g|mg|oz|L)\b', '', clean_name, flags=re.IGNORECASE)
         if clean_name:
             keywords.append(clean_name)
 
-    # 카테고리 키워드
     category_kr = item.get("category", "")
     cat_kw_map = {
         "스킨케어": "韓国コスメ スキンケア",
@@ -241,19 +233,15 @@ def _extract_search_keywords(item: dict, category: str = "") -> str:
     cat_kw = cat_kw_map.get(category_kr, "韓国コスメ")
     keywords.append(cat_kw)
 
-    # 조합
     search_kw = " ".join(keywords)
 
-    # ★ v0.9.2: 약기법 필터 적용
     if search_kw and YAKUJIHO_ENABLED:
         search_kw, _, count = sanitize_jp(search_kw)
         if count > 0:
             logger.info(f"[약기법] 검색 키워드에서 {count}건 치환")
 
-    # 30자 제한
     if len(search_kw) > 30:
         search_kw = search_kw[:30]
-        # 단어 중간 잘림 방지
         last_space = search_kw.rfind(" ")
         if last_space > 20:
             search_kw = search_kw[:last_space]
@@ -262,25 +250,8 @@ def _extract_search_keywords(item: dict, category: str = "") -> str:
 
 
 # ══════════════════════════════════════════════════════════════
-# 1. Qoo10 엑셀 생성 ★ v0.9.2
+# 등록코드 관리
 # ══════════════════════════════════════════════════════════════
-
-def generate_qoo10_excel(items: list) -> BytesIO:
-    # ── 기존 등록 상품 제외 ──
-    registered = _load_registered_codes()
-    if registered:
-        before = len(items)
-        items = [i for i in items if
-                 f"KJ{i.get('item_id', '') or i.get('product_id', '')}" not in registered]
-        skipped = before - len(items)
-        if skipped:
-            logger.info(f"[기존제외] {before}건 → {len(items)}건 (기존 등록 {skipped}건 제외)")
-
-    if not items:
-        logger.warning("[결과] 신규 상품 0건 — 엑셀 생성 스킵")
-        return None
-
-    # ── 이하 기존 코드 그대로 ──
 
 def _load_registered_codes() -> set:
     """기존 Qoo10 등록 상품코드 로드"""
@@ -311,8 +282,31 @@ def _save_registered_codes(new_codes: list):
         json.dump(updated, f, indent=2, ensure_ascii=False)
     logger.info(f"[등록코드] {len(new_codes)}건 추가 → 총 {len(updated)}건 저장")
 
+
+# ══════════════════════════════════════════════════════════════
+# 1. Qoo10 엑셀 생성 (v0.9.3 – 통합 & 버그 수정)
+# ══════════════════════════════════════════════════════════════
+
 def generate_qoo10_excel(items: list) -> BytesIO:
     """Qoo10 J·QSM 대량등록용 엑셀 파일 생성 (공식 50컬럼)"""
+
+    # ── 기존 등록 상품 제외 ──
+    registered = _load_registered_codes()
+    if registered:
+        before = len(items)
+        items = [
+            i for i in items
+            if f"KJ{i.get('item_id', '') or i.get('product_id', '')}" not in registered
+        ]
+        skipped = before - len(items)
+        if skipped:
+            logger.info(f"[기존제외] {before}건 → {len(items)}건 (기존 등록 {skipped}건 제외)")
+
+    if not items:
+        logger.warning("[결과] 신규 상품 0건 — 엑셀 생성 스킵")
+        return None
+
+    # ── openpyxl import ──
     try:
         import openpyxl
         from openpyxl.styles import Font, Alignment
@@ -338,20 +332,22 @@ def generate_qoo10_excel(items: list) -> BytesIO:
     yakujiho_stats = 0
 
     for row_idx, item in enumerate(items, 2):
+        # 카테고리
         qoo10_cat = _match_qoo10_category(item)
         cat_stats[qoo10_cat] = cat_stats.get(qoo10_cat, 0) + 1
 
+        # 브랜드
         qoo10_brand = _match_brand_code(item)
         if qoo10_brand:
             brand_matched += 1
 
+        # 무게
         weight = _get_item_weight(qoo10_cat)
         weight_stats[weight] = weight_stats.get(weight, 0) + 1
 
         # 이미지
         thumbnail = item.get("thumbnail", "") or item.get("image_url", "")
         detail_images = item.get("detail_images", [])
-        # ★ v0.9.1: 구분자 $$
         other_images = "$$".join(detail_images[:20]) if detail_images else ""
 
         # 옵션
@@ -360,8 +356,8 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         opt_values = detail.get("option1_values", [])
         option_str = ""
         if opt_name and opt_values:
-            sell_price = item.get("sell_price_jpy", 0)
-            option_parts = [f"{v}^{sell_price}^99^0^0" for v in opt_values]
+            sell_price_for_opt = item.get("sell_price_jpy", 0)
+            option_parts = [f"{v}^{sell_price_for_opt}^99^0^0" for v in opt_values]
             option_str = f"{opt_name}:#{'$$'.join(option_parts)}"
 
         # 가격
@@ -370,11 +366,11 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         if retail_price <= sell_price:
             retail_price = math.ceil(sell_price * 1.3)
 
-        # ★ v0.9.1: 상품명 홍보문구 제거 후 50자 제한
+        # 상품명 (홍보문구 제거 + 50자 제한)
         name_jp = item.get("name_jp", item.get("name", ""))
         item_name = _truncate_item_name(name_jp)
 
-        # ★ v0.9.2: 상품명에도 약기법 필터 적용
+        # 약기법 필터 (상품명)
         if item_name and YAKUJIHO_ENABLED:
             item_name, _, name_filter_count = sanitize_jp(item_name)
             if name_filter_count > 0:
@@ -384,63 +380,66 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         # 검색어 (약기법 필터 포함)
         search_kw = _extract_search_keywords(item, qoo10_cat)
 
-        # ★ v0.9.2: header_html, footer_html은 item dict에서 읽기
+        # header_html, footer_html
         header_html = item.get("header_html", "")
         footer_html = item.get("footer_html", "")
 
+        # seller_unique_item_id
+        seller_uid = f"KJ{item.get('item_id', '') or item.get('product_id', '')}"
+
         # ── 50컬럼 행 데이터 (A~AX) ──
-        row = [
-            '',                              # A  item_number (신규→공란)
-            f'KJ{seller_id}',               # B  seller_unique_item_id
-            str(cat_code),                   # C  category_number
-            str(brand_code),                 # D  brand_number
-            item_name,                       # E  item_name
-            '韓国コスメ 正規品',               # F  item_promotion_name
-            'Y',                             # G  item_status
-            '',                              # H  start_date
-            '2030-12-31',                    # I  end_date
-            str(price),                      # J  price_yen
-            str(retail_price),               # K  retail_price_yen
-            '',                              # L  taxrate
-            '100',                           # M  quantity
-            option_str,                      # N  option_info
-            '',                              # O  additional_option_info
-            '',                              # P  additional_option_text
-            item.get('thumbnail_processed', '') or main_image,  # Q  ★ 변경: 가공 썸네일 우선
-            other_images,                    # R  image_other_url
-            '',                              # S  video_url
-            '',                              # T  image_option_info
-            '',                              # U  image_additional_option_info
-            item.get('header_html', ''),     # V  ★ 변경: 상품 분석 마케팅 요약
-            item.get('footer_html', ''),     # W  ★ 변경: 공통 하단 템플릿
-            detail_html,                     # X  item_description
-            QOO10_KSE_SHIPPING_CODE,         # Y  Shipping_number
-            '',                              # Z  option_number
-            '3',                             # AA available_shipping_date
-            '7',                             # AB desired_shipping_date
-            search_kw,                       # AC search_keyword
-            '1',                             # AD item_condition_type
-            '2',                             # AE origin_type
-            '',                              # AF origin_region_id
-            'KR',                            # AG origin_country_id
-            '',                              # AH origin_others
-            '',                              # AI medication_type
-            str(weight),                     # AJ item_weight
-            '',                              # AK item_material
-            '',                              # AL model_name
-            '',                              # AM external_product_type
-            '',                              # AN external_product_id
-            '',                              # AO manufacture_date
-            '',                              # AP expiration_date_type
-            '',                              # AQ expiration_date_MFD
-            '',                              # AR expiration_date_PAO
-            '',                              # AS expiration_date_EXP
-            'N',                             # AT under18s_display
-            '',                              # AU A/S_info
-            '',                              # AV buy_limit_type
-            '',                              # AW buy_limit_date
-            '',                              # AX buy_limit_qty
-        ]   
+        row_data = [
+            '',                                         # A  item_number (신규→공란)
+            seller_uid,                                 # B  seller_unique_item_id
+            str(qoo10_cat),                             # C  category_number
+            str(qoo10_brand),                           # D  brand_number
+            item_name,                                  # E  item_name
+            '韓国コスメ 正規品',                           # F  item_promotion_name
+            'Y',                                        # G  item_status
+            '',                                         # H  start_date
+            '2030-12-31',                               # I  end_date
+            str(sell_price),                            # J  price_yen
+            str(retail_price),                          # K  retail_price_yen
+            '',                                         # L  taxrate
+            '100',                                      # M  quantity
+            option_str,                                 # N  option_info
+            '',                                         # O  additional_option_info
+            '',                                         # P  additional_option_text
+            item.get('thumbnail_processed', '') or thumbnail,  # Q  image_main_url
+            other_images,                               # R  image_other_url
+            '',                                         # S  video_url
+            '',                                         # T  image_option_info
+            '',                                         # U  image_additional_option_info
+            header_html,                                # V  header_html
+            footer_html,                                # W  footer_html
+            item.get('detail_html', ''),                # X  item_description
+            QOO10_KSE_SHIPPING_CODE,                    # Y  Shipping_number
+            '',                                         # Z  option_number
+            '3',                                        # AA available_shipping_date
+            '7',                                        # AB desired_shipping_date
+            search_kw,                                  # AC search_keyword
+            '1',                                        # AD item_condition_type
+            '2',                                        # AE origin_type
+            '',                                         # AF origin_region_id
+            'KR',                                       # AG origin_country_id
+            '',                                         # AH origin_others
+            '',                                         # AI medication_type
+            str(weight),                                # AJ item_weight
+            '',                                         # AK item_material
+            '',                                         # AL model_name
+            '',                                         # AM external_product_type
+            '',                                         # AN external_product_id
+            '',                                         # AO manufacture_date
+            '',                                         # AP expiration_date_type
+            '',                                         # AQ expiration_date_MFD
+            '',                                         # AR expiration_date_PAO
+            '',                                         # AS expiration_date_EXP
+            'N',                                        # AT under18s_display
+            '',                                         # AU A/S_info
+            '',                                         # AV buy_limit_type
+            '',                                         # AW buy_limit_date
+            '',                                         # AX buy_limit_qty
+        ]
 
         for col, value in enumerate(row_data, 1):
             ws.cell(row=row_idx, column=col, value=value)
@@ -456,10 +455,12 @@ def generate_qoo10_excel(items: list) -> BytesIO:
     for col_letter, width in col_widths.items():
         ws.column_dimensions[col_letter].width = width
 
+    # ── BytesIO로 출력 ──
     output = BytesIO()
     wb.save(output)
     output.seek(0)
 
+    # ── 로그 ──
     logger.info(f"[엑셀] Qoo10 업로드 파일 생성: {len(items)}건 (50컬럼)")
     logger.info(f"[엑셀] 브랜드 매칭: {brand_matched}/{len(items)}건")
     if yakujiho_stats > 0:
@@ -481,25 +482,35 @@ def upload_to_drive(excel_bytes: BytesIO, filename: str) -> str:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseUpload
-        import json
+        import json as _json
 
         sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
         if not sa_json:
             raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON 환경변수 없음")
 
-        sa_info = json.loads(sa_json)
+        sa_info = _json.loads(sa_json)
         credentials = service_account.Credentials.from_service_account_info(
             sa_info, scopes=["https://www.googleapis.com/auth/drive.file"]
         )
         service = build("drive", "v3", credentials=credentials)
 
         folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
-        file_metadata = {"name": filename, "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        file_metadata = {
+            "name": filename,
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
         if folder_id:
             file_metadata["parents"] = [folder_id]
 
-        media = MediaIoBaseUpload(excel_bytes, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        file = service.files().create(body=file_metadata, media_body=media, fields="id,webViewLink").execute()
+        media = MediaIoBaseUpload(
+            excel_bytes,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        file = (
+            service.files()
+            .create(body=file_metadata, media_body=media, fields="id,webViewLink")
+            .execute()
+        )
 
         return file.get("webViewLink", f"https://drive.google.com/file/d/{file.get('id')}")
 
@@ -521,7 +532,7 @@ def generate_and_upload(items: list) -> dict:
     if excel_bytes is None:
         return {"item_count": 0, "filename": "", "drive_url": "", "success": False}
 
-    # ── 항상 artifacts/ 에 로컬 저장 (GitHub Actions Artifacts 다운로드용) ──
+    # ── 항상 artifacts/ 에 로컬 저장 ──
     os.makedirs("artifacts", exist_ok=True)
     local_path = f"artifacts/{filename}"
     excel_bytes.seek(0)
@@ -565,18 +576,22 @@ def generate_and_upload(items: list) -> dict:
 # 직접 실행 (테스트)
 # ══════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
 
     test_items = [
         {
             "name": "어성초 77% 수딩 토너",
             "name_jp": "【ANUA】ドクダミ77% スージングトナー 250ml",
             "brand": "ANUA",
+            "category": "토너/스킨",
             "item_id": "12345",
             "product_id": "12345",
             "supply_price": 8000,
             "sell_price_jpy": 2600,
+            "consumer_price_jpy": 0,
             "margin_rate": 0.217,
             "final_score": 82,
             "grade": "A",
@@ -597,10 +612,12 @@ if __name__ == "__main__":
             "name": "안티에이징 화이트닝 크림",
             "name_jp": "【TEST】アンチエイジング ホワイトニング クリーム 50ml",
             "brand": "TEST",
+            "category": "크림",
             "item_id": "99999",
             "product_id": "99999",
             "supply_price": 12000,
             "sell_price_jpy": 3800,
+            "consumer_price_jpy": 0,
             "margin_rate": 0.25,
             "final_score": 75,
             "grade": "B",
@@ -613,13 +630,19 @@ if __name__ == "__main__":
         },
     ]
 
+    print(f"=== uploader_qoo10.py v0.9.3 테스트 ===")
+    print(f"헤더 수: {len(OFFICIAL_HEADERS)}컬럼 (A~AX)")
+    print(f"약기법 필터 활성화: {YAKUJIHO_ENABLED}")
+    print()
+
     excel = generate_qoo10_excel(test_items)
     if excel:
-        with open("test_qoo10_upload.xlsx", "wb") as f:
+        test_filename = "test_qoo10_upload.xlsx"
+        with open(test_filename, "wb") as f:
             f.write(excel.read())
-        print("테스트 엑셀 생성 완료: test_qoo10_upload.xlsx")
-        print(f"헤더 수: {len(OFFICIAL_HEADERS)}컬럼 (A~AX)")
-        print(f"약기법 필터 활성화: {YAKUJIHO_ENABLED}")
-        print("\n약기법 테스트: 두 번째 상품명이 필터링되었는지 확인하세요.")
+        print(f"테스트 엑셀 생성 완료: {test_filename}")
+        print(f"생성 건수: {len(test_items)}건")
+        print()
+        print("약기법 테스트: 두 번째 상품명(ホワイトニング)이 필터링되었는지 확인하세요.")
     else:
-        print("엑셀 생성 실패")
+        print("엑셀 생성 실패 (신규 상품 0건 또는 openpyxl 미설치)")
