@@ -253,13 +253,23 @@ def process_thumbnails_batch(items: list) -> list:
 
         # 썸네일 생성
         result = create_thumbnail(image_bytes, badge_text, bottom_text, oy_badge_text)
-        item["thumbnail_processed"] = result
 
         if result:
-            success_count += 1
+            # ★ v1.1: bytes를 파일로 저장, item에는 경로만
+            os.makedirs("artifacts/thumbnails", exist_ok=True)
+            item_id = item.get("item_id", "") or item.get("product_id", "") or str(idx)
+            thumb_filename = f"thumb_{item_id}.jpg"
+            thumb_path = f"artifacts/thumbnails/{thumb_filename}"
 
-    logger.info(f"[썸네일 완료] {success_count}/{len(items)}건 생성")
-    return items
+            with open(thumb_path, "wb") as f:
+                f.write(result)
+
+            item["thumbnail_processed"] = thumb_path
+            success_count += 1
+            logger.debug(f"[썸네일] 저장: {thumb_path}")
+        else:
+            item["thumbnail_processed"] = None
+
 
 
 # ══════════════════════════════════════════════════════════════

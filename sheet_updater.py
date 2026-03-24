@@ -207,7 +207,15 @@ def _build_upload_row(item: dict) -> list:
     header_html = item.get("header_html", "")
     footer_html = item.get("footer_html", "")
 
-    return [
+def _safe_str(value) -> str:
+    """bytes나 비문자열 타입을 안전하게 str로 변환"""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return ""
+    return str(value) if not isinstance(value, str) else value
+
+    row_data = [
         '',                                                  # A  item_number
         seller_uid,                                          # B  seller_unique_item_id
         str(qoo10_cat),                                      # C  category_number
@@ -259,6 +267,9 @@ def _build_upload_row(item: dict) -> list:
         '',                                                  # AW buy_limit_date
         '',                                                  # AX buy_limit_qty
     ]
+
+    # ★ v0.8.2: bytes 방어 — 모든 값을 안전한 문자열로
+    return [_safe_str(v) for v in row_data]
 
 
 # ══════════════════════════════════════════════════════════════

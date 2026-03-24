@@ -442,6 +442,8 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         ]
 
         for col, value in enumerate(row_data, 1):
+            if isinstance(value, bytes):
+                value = ""
             ws.cell(row=row_idx, column=col, value=value)
 
     # ── 열 너비 ──
