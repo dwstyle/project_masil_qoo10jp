@@ -8,6 +8,9 @@ Version: 0.8.2
      → 큐텐업로드 시트에 소싱 분석 데이터가 중복 삽입되던 문제 해결
      → 81건이 162건으로 기록되던 버그 수정
   2. update_all_sheets 호출 구조 명확화
+  3. _safe_str 헬퍼 추가 (bytes 방어)
+  4. _build_upload_row에서 Q열 이미지 URL 방어 (로컬 경로 폴백)
+  5. V/W열 2,500자 제한
 
 기존 유지 (v0.8.1):
   - 50컬럼 대응 (H: start_date, L: taxrate)
@@ -36,18 +39,23 @@ try:
     from uploader_qoo10 import (
         _match_qoo10_category,
         _match_brand_code,
-        _get_item_weight,
+        _get_item_weight_kg,
         _truncate_item_name,
         _extract_search_keywords,
+        _clean_html,
         OFFICIAL_HEADERS,
         FORBIDDEN_PROMO_WORDS,
-        QOO10_KSE_SHIPPING_CODE as UPLOADER_SHIPPING_CODE,
+        HEADER_MAX_LEN,
+        FOOTER_MAX_LEN,
     )
     UPLOADER_IMPORTED = True
     logger.info("[import] uploader_qoo10 매핑 함수 로드 완료")
 except ImportError:
     UPLOADER_IMPORTED = False
     logger.warning("[import] uploader_qoo10 import 실패 – 로컬 최소 구현 사용")
+
+    HEADER_MAX_LEN = 2500
+    FOOTER_MAX_LEN = 2500
 
     OFFICIAL_HEADERS = [
         "item_number", "seller_unique_item_id", "category_number", "brand_number",
@@ -78,8 +86,8 @@ except ImportError:
     def _match_brand_code(item):
         return item.get("qoo10_brand", "")
 
-    def _get_item_weight(cat):
-        return 300
+    def _get_item_weight_kg(cat):
+        return 0.3
 
     def _truncate_item_name(name, max_len=50):
         if not name:
@@ -96,6 +104,26 @@ except ImportError:
         name = item.get("name_jp", item.get("name", ""))
         kw = f"{brand} {name}".strip()
         return kw[:30] if len(kw) > 30 else kw
+
+    def _clean_html(raw_html, max_len=2500):
+        if not raw_html or isinstance(raw_html, bytes):
+            return ""
+        return raw_html[:max_len] if len(raw_html) > max_len else raw_html
+
+
+# ══════════════════════════════════════════════════════════════
+# 헬퍼
+# ══════════════════════════════════════════════════════════════
+
+def _safe_str(value) -> str:
+    """bytes나 비문자열 타입을 안전하게 str로 변환"""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return ""
+    if isinstance(value, float) and (value != value):  # NaN
+        return ""
+    return str(value) if not isinstance(value, str) else value
 
 
 # ══════════════════════════════════════════════════════════════
@@ -166,16 +194,28 @@ def _ensure_cols(worksheet, needed_cols):
 def _build_upload_row(item: dict) -> list:
     """
     item dict → Qoo10 공식 50컬럼 리스트 (A~AX)
-    ★ v0.8.2: 이 함수는 큐텐업로드 시트 전용
+    ★ v0.8.2: 큐텐업로드 시트 전용, bytes 방어, 이미지/HTML 방어
     """
     qoo10_cat = _match_qoo10_category(item)
     qoo10_brand = _match_brand_code(item)
-    weight = _get_item_weight(qoo10_cat)
+    weight_kg = _get_item_weight_kg(qoo10_cat)
 
-    # 이미지
+    # 이미지 (★ 로컬 경로 → 원본 URL 폴백)
     thumbnail = item.get("thumbnail", "") or item.get("image_url", "")
+    thumb_processed = item.get("thumbnail_processed", "")
+    if isinstance(thumb_processed, bytes):
+        thumb_processed = ""
+    if thumb_processed and isinstance(thumb_processed, str) and thumb_processed.startswith("http"):
+        main_image = thumb_processed
+    elif thumbnail and isinstance(thumbnail, str) and thumbnail.startswith("http"):
+        main_image = thumbnail
+    else:
+        main_image = ""
+
     detail_images = item.get("detail_images", [])
-    other_images = "$$".join(detail_images[:20]) if detail_images else ""
+    other_images = "$$".join(
+        [img for img in detail_images[:20] if isinstance(img, str) and img.startswith("http")]
+    ) if detail_images else ""
 
     # 옵션
     detail = item.get("detail_info", {})
@@ -203,17 +243,9 @@ def _build_upload_row(item: dict) -> list:
     # seller_unique_item_id
     seller_uid = f"KJ{item.get('item_id', '') or item.get('product_id', '')}"
 
-    # header / footer
-    header_html = item.get("header_html", "")
-    footer_html = item.get("footer_html", "")
-
-def _safe_str(value) -> str:
-    """bytes나 비문자열 타입을 안전하게 str로 변환"""
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return ""
-    return str(value) if not isinstance(value, str) else value
+    # header / footer (★ v0.8.2: 2,500자 제한 + Python 코드 제거)
+    header_html = _clean_html(item.get("header_html", ""), HEADER_MAX_LEN)
+    footer_html = _clean_html(item.get("footer_html", ""), FOOTER_MAX_LEN)
 
     row_data = [
         '',                                                  # A  item_number
@@ -232,14 +264,14 @@ def _safe_str(value) -> str:
         option_str,                                          # N  option_info
         '',                                                  # O  additional_option_info
         '',                                                  # P  additional_option_text
-        item.get('thumbnail_processed', '') or thumbnail,    # Q  image_main_url
+        main_image,                                          # Q  image_main_url
         other_images,                                        # R  image_other_url
         '',                                                  # S  video_url
         '',                                                  # T  image_option_info
         '',                                                  # U  image_additional_option_info
         header_html,                                         # V  header_html
         footer_html,                                         # W  footer_html
-        item.get('detail_html', ''),                         # X  item_description
+        _safe_str(item.get('detail_html', '')),              # X  item_description
         QOO10_KSE_SHIPPING_CODE,                             # Y  Shipping_number
         '',                                                  # Z  option_number
         '3',                                                 # AA available_shipping_date
@@ -251,7 +283,7 @@ def _safe_str(value) -> str:
         'KR',                                                # AG origin_country_id
         '',                                                  # AH origin_others
         '',                                                  # AI medication_type
-        str(weight),                                         # AJ item_weight
+        str(weight_kg),                                      # AJ item_weight (kg)
         '',                                                  # AK item_material
         '',                                                  # AL model_name
         '',                                                  # AM external_product_type
@@ -268,19 +300,16 @@ def _safe_str(value) -> str:
         '',                                                  # AX buy_limit_qty
     ]
 
-    # ★ v0.8.2: bytes 방어 — 모든 값을 안전한 문자열로
+    # ★ v0.8.2: bytes 방어
     return [_safe_str(v) for v in row_data]
 
 
 # ══════════════════════════════════════════════════════════════
-# 소싱후보 행 빌더 (★ v0.8.2 신규 – 기존 루프에서 분리)
+# 소싱후보 행 빌더 (★ v0.8.2 신규)
 # ══════════════════════════════════════════════════════════════
 
 def _build_sourcing_row(item: dict, timestamp: str) -> list:
-    """
-    item dict → 소싱후보 시트 27컬럼 리스트
-    ★ v0.8.2: update_upload_sheet 루프에서 분리
-    """
+    """item dict → 소싱후보 시트 27컬럼 리스트"""
     pi = item.get("price_info", {})
     si = item.get("score_info", {})
     comp = item.get("competitor_prices", {})
@@ -289,7 +318,7 @@ def _build_sourcing_row(item: dict, timestamp: str) -> list:
     kakaku_low = comp.get("kakaku_lowest", "")
     qoo10_low = comp.get("qoo10_lowest", "")
 
-    return [
+    return [_safe_str(v) for v in [
         timestamp,
         item.get("item_id", ""),
         item.get("name", ""),
@@ -317,7 +346,7 @@ def _build_sourcing_row(item: dict, timestamp: str) -> list:
         item.get("demand_rank", ""),
         len(item.get("detail_images", [])),
         item.get("url", ""),
-    ]
+    ]]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -373,12 +402,10 @@ def update_trend_sheet(trend_data: dict):
         ss = _get_spreadsheet()
         ws = _get_or_create_worksheet(ss, "트렌드분석", rows=2000, cols=20)
 
-        # 헤더 확인
         existing = ws.row_values(1)
         if not existing or len(existing) < len(TREND_HEADERS):
             ws.update('A1', [TREND_HEADERS])
 
-        # 데이터 추가
         next_row = len(ws.get_all_values()) + 1
         _ensure_rows(ws, next_row + len(rows))
         ws.update(f'A{next_row}', rows)
@@ -410,12 +437,10 @@ def update_sourcing_sheet(items: list):
         ss = _get_spreadsheet()
         ws = _get_or_create_worksheet(ss, "소싱후보", rows=2000, cols=30)
 
-        # 헤더 확인
         existing = ws.row_values(1)
         if not existing or len(existing) < len(SOURCING_HEADERS):
             ws.update('A1', [SOURCING_HEADERS])
 
-        # 데이터 추가
         next_row = len(ws.get_all_values()) + 1
         _ensure_rows(ws, next_row + len(rows))
         ws.update(f'A{next_row}', rows)
@@ -433,7 +458,6 @@ def update_upload_sheet(items: list):
     큐텐업로드 시트 업데이트 (공식 50컬럼)
     ★ v0.8.2: _build_upload_row만 사용, 소싱 분석 행 제거
     """
-    # ── 50컬럼 업로드 행만 생성 ──
     upload_rows = []
     for item in items:
         upload_rows.append(_build_upload_row(item))
@@ -442,7 +466,7 @@ def update_upload_sheet(items: list):
         logger.info("[큐텐업로드] 데이터 없음 – 스킵")
         return {"count": 0, "brand_matched": 0, "cat_top5": {}, "weight_dist": {}}
 
-    # ── 통계 ──
+    # 통계
     brand_matched = 0
     cat_stats = {}
     weight_stats = {}
@@ -455,24 +479,21 @@ def update_upload_sheet(items: list):
         if qoo10_brand:
             brand_matched += 1
 
-        weight = _get_item_weight(qoo10_cat)
-        weight_key = str(weight)
+        weight_kg = _get_item_weight_kg(qoo10_cat)
+        weight_key = str(weight_kg)
         weight_stats[weight_key] = weight_stats.get(weight_key, 0) + 1
 
     try:
         ss = _get_spreadsheet()
         ws = _get_or_create_worksheet(ss, "큐텐업로드", rows=2000, cols=55)
 
-        # 열 수 확보
         _ensure_cols(ws, len(OFFICIAL_HEADERS))
 
-        # 헤더 확인
         existing = ws.row_values(1)
         if not existing or len(existing) < len(OFFICIAL_HEADERS):
             ws.update('A1', [OFFICIAL_HEADERS])
             logger.info(f"[큐텐업로드] 헤더 설정 완료: {len(OFFICIAL_HEADERS)}컬럼")
 
-        # 데이터 추가
         next_row = len(ws.get_all_values()) + 1
         _ensure_rows(ws, next_row + len(upload_rows))
         ws.update(f'A{next_row}', upload_rows)
@@ -511,7 +532,6 @@ def log_run_info(summary: dict):
         ss = _get_spreadsheet()
         ws = _get_or_create_worksheet(ss, "운영정보", rows=2000, cols=10)
 
-        # 헤더 확인
         existing = ws.row_values(1)
         if not existing:
             ws.update('A1', [["timestamp", "key", "value"]])
@@ -617,7 +637,11 @@ if __name__ == "__main__":
         print("QOO10_SHEET_ID 환경변수가 없어 시트 연결을 건너뜁니다.")
 
     print()
-    print("★ v0.8.2 핵심 수정: 큐텐업로드 시트에 소싱 분석 행이 중복 삽입되던 버그 수정")
-    print("  - update_upload_sheet: _build_upload_row만 사용 (50컬럼)")
-    print("  - update_sourcing_sheet: _build_sourcing_row만 사용 (27컬럼)")
+    print("★ v0.8.2 핵심 수정:")
+    print("  - 큐텐업로드: _build_upload_row만 사용 (50컬럼)")
+    print("  - 소싱후보: _build_sourcing_row만 사용 (27컬럼)")
     print("  - 81건 입력 → 81행 출력 (기존 162행 → 81행)")
+    print("  - Q열: 로컬 경로 → http URL 폴백")
+    print("  - V/W열: 2,500자 제한 + Python 코드 제거")
+    print("  - AJ열: kg 단위")
+    print("  - Y열: 숫자 배송비 코드")

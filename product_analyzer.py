@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ── 설정 ──
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-2.5-flash-preview-05-20"
+GEMINI_MODEL = "gemini-2.5-flash"
 MAX_IMAGES_PER_PRODUCT = 5  # 비용 절약: 상세 이미지 최대 5장
 API_DELAY = 4.5  # 분당 10회 제한 → 6초 간격 (여유 포함)
 
@@ -357,6 +357,8 @@ FOOTER_HTML = """<div style="text-align:center; font-family:'Hiragino Sans','Mei
 def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None) -> str:
     """
     상품별 header_html 생성.
+    ★ v1.1: Python 코드가 HTML에 혼입되던 버그 수정
+           marketing_html, social_proof_html을 f-string 밖에서 먼저 생성
 
     Args:
         item: 상품 정보 dict
@@ -365,7 +367,11 @@ def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None
     Returns:
         header HTML 문자열
     """
-    from yakujiho_filter import sanitize_html
+    try:
+        from yakujiho_filter import sanitize_html
+    except ImportError:
+        def sanitize_html(h):
+            return h
 
     name_jp = item.get("name_jp", item.get("name", ""))
     brand = item.get("brand", "")
@@ -387,7 +393,7 @@ def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None
     certifications = extracted.get("certifications", [])
     reviews_summary = extracted.get("reviews_summary", "")
 
-    # 올리브영 배지
+    # ── 올리브영 배지 ──
     oy_badge = ""
     if oy.get("found"):
         ranking = oy.get("ranking", "")
@@ -404,90 +410,30 @@ def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None
             oy_parts.append(f"レビュー {review_count:,}件")
 
         if oy_parts:
+            catchphrase_line = ""
+            if catchphrase:
+                catchphrase_line = f'<p style="font-size:12px; margin:5px 0 0 0; color:#e8f5e9;">{catchphrase}</p>'
             oy_badge = f"""
   <div style="background:linear-gradient(135deg, #2e7d32, #43a047); padding:12px; border-radius:6px; margin-bottom:15px;">
     <p style="font-size:14px; margin:0; color:#fff; font-weight:bold;">
       {' ｜ '.join(oy_parts)}
     </p>
-    {'<p style="font-size:12px; margin:5px 0 0 0; color:#e8f5e9;">' + catchphrase + '</p>' if catchphrase else ''}
+    {catchphrase_line}
   </div>"""
 
-    # 인증 배지
+    # ── 인증 배지 ──
     cert_badge = ""
     if certifications:
-        cert_tags = " ".join([f'<span style="display:inline-block; background:#e3f2fd; color:#1565c0; padding:3px 8px; border-radius:4px; font-size:11px; margin:2px;">{c}</span>' for c in certifications])
+        cert_tags = " ".join([
+            f'<span style="display:inline-block; background:#e3f2fd; color:#1565c0; padding:3px 8px; border-radius:4px; font-size:11px; margin:2px;">{c}</span>'
+            for c in certifications
+        ])
         cert_badge = f"""
   <div style="margin-bottom:15px;">
     {cert_tags}
   </div>"""
 
-    # 포인트 리스트
-    points_html = ""
-    if points:
-        items_html = ""
-        for p in points[:5]:
-            items_html += f'      <li style="margin-bottom:5px;">{p}</li>\n'
-        points_html = f"""
-  <div style="text-align:left; padding:15px; background:#fdfbf9; border-radius:6px; margin-bottom:15px; border:1px solid #efe8dd;">
-    <p style="font-size:15px; font-weight:bold; margin:0 0 10px 0; color:#c9a96e;">✨ この商品のポイント</p>
-    <ul style="font-size:13px; color:#555; margin:0; padding-left:20px; line-height:1.8;">
-{items_html}    </ul>
-  </div>"""
-
-    # 추천 대상
-    recommend_html = ""
-    if recommended:
-        rec_items = ""
-        for r in recommended[:4]:
-            rec_items += f'      <li style="margin-bottom:3px;">{r}</li>\n'
-        recommend_html = f"""
-  <div style="text-align:left; padding:15px; background:#f3e5f5; border-radius:6px; margin-bottom:15px;">
-    <p style="font-size:15px; font-weight:bold; margin:0 0 10px 0; color:#7b1fa2;">💜 こんな方におすすめ</p>
-    <ul style="font-size:13px; color:#555; margin:0; padding-left:20px; line-height:1.8;">
-{rec_items}    </ul>
-  </div>"""
-
-    # 성분 정보
-    ingredients_html = ""
-    if ingredients:
-        ing_text = "、".join(ingredients[:5])
-        ingredients_html = f"""
-  <div style="text-align:left; padding:12px 15px; background:#e8eaf6; border-radius:6px; margin-bottom:15px;">
-    <p style="font-size:13px; margin:0; color:#283593;">
-      <strong>🧪 主な成分：</strong>{ing_text}
-    </p>
-  </div>"""
-
-    # 사용법
-    usage_html = ""
-    if usage_jp:
-        usage_html = f"""
-  <div style="text-align:left; padding:12px 15px; background:#fff3e0; border-radius:6px; margin-bottom:15px;">
-    <p style="font-size:13px; margin:0; color:#e65100;">
-      <strong>📝 使い方：</strong>{usage_jp}
-    </p>
-  </div>"""
-
-    # 용량
-    volume_text = f" {volume}" if volume else ""
-
-    # 조립
-    html = f"""<div style="text-align:center; font-family:'Hiragino Sans','Meiryo',sans-serif; max-width:750px; margin:0 auto; padding:10px; color:#333;">
-
-  <!-- 브랜드 배너 -->
-  <div style="background:linear-gradient(135deg, #1a1a1a, #333); padding:18px; border-radius:8px; margin-bottom:15px;">
-    <p style="font-size:18px; margin:0 0 5px 0; color:#c9a96e; font-weight:bold;">Plan B Cabinet</p>
-    <p style="font-size:12px; margin:0; color:#ccc;">韓国トレンドコスメ × プレミアムファッション</p>
-  </div>
-
-  <!-- LINE 유도 -->
-  <div style="background:#06C755; padding:10px; border-radius:6px; margin-bottom:15px;">
-    <p style="font-size:13px; margin:0; color:#fff; font-weight:bold;">
-      📱 LINE友だち追加で200円クーポン → <span style="text-decoration:underline;">@planbasap</span>
-    </p>
-  </div>
-
-    # 마케팅 메시지 (상품 헤더 위)
+    # ── 마케팅 메시지 (★ v1.1: f-string 밖에서 생성) ──
     marketing_html = ""
     if marketing_message:
         marketing_html = (
@@ -499,7 +445,7 @@ def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None
             '  </div>'
         )
 
-    # 리뷰 하이라이트 + 사용감
+    # ── 리뷰 하이라이트 + 사용감 (★ v1.1: f-string 밖에서 생성) ──
     social_proof_html = ""
     social_parts = []
     if review_highlight:
@@ -517,15 +463,90 @@ def build_header_html(item: dict, analysis: dict = None, oliveyoung: dict = None
             '  <!-- 리뷰/사용감 -->\n'
             '  <div style="text-align:left; padding:15px; background:#f0f4f8; border-radius:6px; margin-bottom:15px; border-left:4px solid #5b9bd5;">\n'
             '    <p style="font-size:14px; font-weight:bold; margin:0 0 8px 0; color:#2c3e50;">📣 リアルな声</p>\n'
-            + items_str +
-            '  </div>'
+            + items_str
+            + '  </div>'
         )
+
+    # ── 포인트 리스트 ──
+    points_html = ""
+    if points:
+        items_html = ""
+        for p in points[:5]:
+            items_html += f'      <li style="margin-bottom:5px;">{p}</li>\n'
+        points_html = f"""
+  <div style="text-align:left; padding:15px; background:#fdfbf9; border-radius:6px; margin-bottom:15px; border:1px solid #efe8dd;">
+    <p style="font-size:15px; font-weight:bold; margin:0 0 10px 0; color:#c9a96e;">✨ この商品のポイント</p>
+    <ul style="font-size:13px; color:#555; margin:0; padding-left:20px; line-height:1.8;">
+{items_html}    </ul>
+  </div>"""
+
+    # ── 추천 대상 ──
+    recommend_html = ""
+    if recommended:
+        rec_items = ""
+        for r in recommended[:4]:
+            rec_items += f'      <li style="margin-bottom:3px;">{r}</li>\n'
+        recommend_html = f"""
+  <div style="text-align:left; padding:15px; background:#f3e5f5; border-radius:6px; margin-bottom:15px;">
+    <p style="font-size:15px; font-weight:bold; margin:0 0 10px 0; color:#7b1fa2;">💜 こんな方におすすめ</p>
+    <ul style="font-size:13px; color:#555; margin:0; padding-left:20px; line-height:1.8;">
+{rec_items}    </ul>
+  </div>"""
+
+    # ── 성분 정보 ──
+    ingredients_html = ""
+    if ingredients:
+        ing_text = "、".join(ingredients[:5])
+        ingredients_html = f"""
+  <div style="text-align:left; padding:12px 15px; background:#e8eaf6; border-radius:6px; margin-bottom:15px;">
+    <p style="font-size:13px; margin:0; color:#283593;">
+      <strong>🧪 主な成分：</strong>{ing_text}
+    </p>
+  </div>"""
+
+    # ── 사용법 ──
+    usage_html = ""
+    if usage_jp:
+        usage_html = f"""
+  <div style="text-align:left; padding:12px 15px; background:#fff3e0; border-radius:6px; margin-bottom:15px;">
+    <p style="font-size:13px; margin:0; color:#e65100;">
+      <strong>📝 使い方：</strong>{usage_jp}
+    </p>
+  </div>"""
+
+    # ── 용량 텍스트 ──
+    volume_text = f" {volume}" if volume else ""
+
+    # ── 헤드라인 ──
+    headline_html = ""
+    if headline:
+        headline_html = f'<p style="font-size:15px; color:#c9a96e; font-weight:bold; margin:10px 0 0 0;">{headline}</p>'
+
+    # ══ 최종 HTML 조립 (★ v1.1: 순수 HTML만, Python 코드 없음) ══
+    html = f"""<div style="text-align:center; font-family:'Hiragino Sans','Meiryo',sans-serif; max-width:750px; margin:0 auto; padding:10px; color:#333;">
+
+  <!-- 브랜드 배너 -->
+  <div style="background:linear-gradient(135deg, #1a1a1a, #333); padding:18px; border-radius:8px; margin-bottom:15px;">
+    <p style="font-size:18px; margin:0 0 5px 0; color:#c9a96e; font-weight:bold;">Plan B Cabinet</p>
+    <p style="font-size:12px; margin:0; color:#ccc;">韓国トレンドコスメ × プレミアムファッション</p>
+  </div>
+
+  <!-- LINE 유도 -->
+  <div style="background:#06C755; padding:10px; border-radius:6px; margin-bottom:15px;">
+    <p style="font-size:13px; margin:0; color:#fff; font-weight:bold;">
+      📱 LINE友だち追加で200円クーポン → <span style="text-decoration:underline;">@planbasap</span>
+    </p>
+  </div>
+
+{marketing_html}
+
+{social_proof_html}
 
   <!-- 상품명 헤더 -->
   <div style="background:#fdfbf9; padding:20px; border-radius:8px; margin-bottom:15px; border:1px solid #efe8dd;">
     <h2 style="font-size:20px; margin:0 0 8px 0; color:#1a1a1a;">{name_jp}</h2>
     <p style="font-size:14px; color:#888; margin:5px 0;">🇰🇷 {brand}{volume_text} ｜ 韓国コスメ</p>
-    {{'<p style="font-size:15px; color:#c9a96e; font-weight:bold; margin:10px 0 0 0;">' + headline + '</p>' if headline else ''}}
+    {headline_html}
   </div>
 
   <!-- 정품보증 배너 -->

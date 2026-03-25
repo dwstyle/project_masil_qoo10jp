@@ -1,24 +1,20 @@
 """
 uploader_qoo10.py – Qoo10 J·QSM 대량등록용 엑셀 생성 & Drive 업로드
 Project: Plan B Cabinet – Qoo10 Japan Beauty Sourcing
-Version: 0.9.3
+Version: 0.9.4
 
-변경사항 (v0.9.2 → v0.9.3):
-  - [BUG FIX] seller_id NameError 수정 → item.get('item_id') 사용
-  - [BUG FIX] cat_code → qoo10_cat, brand_code → qoo10_brand, price → sell_price 등 변수명 통일
-  - [BUG FIX] main_image → thumbnail, detail_html → item.get('detail_html','')
-  - [BUG FIX] row vs row_data 변수명 통일
-  - [BUG FIX] generate_qoo10_excel 함수 중복 정의 → 하나로 통합 (등록코드 제외 로직 포함)
+변경사항 (v0.9.3 → v0.9.4):
+  - [FIX] Q열: 로컬 경로(artifacts/) → 원본 thumbnail URL 폴백
+  - [FIX] V/W열: header_html, footer_html 2,500자 제한 + Python 코드 혼입 제거
+  - [FIX] Y열: 배송비 코드 → 환경변수에서 숫자 코드 읽기 (기본값 813137)
+  - [FIX] AJ열: 무게 g→kg 변환 (소수점 둘째자리, 최대 30kg)
+  - [FIX] bytes 타입 방어 (thumbnail_processed bytes 이슈)
 
-기존 유지 (v0.9.2):
-  - V열(header_html): item dict에서 읽기
-  - W열(footer_html): item dict에서 읽기
-  - AC열(search_keyword): 약기법 금지 키워드 자동 필터링
-  - 공식 50컬럼 (A~AX) 구조
-  - 구분자 $$
-  - 상품명 홍보문구 제거 + 50자 제한
-  - 검색키워드 30자 제한
-  - 배송기간 3일 통일
+기존 유지 (v0.9.3):
+  - seller_id → item.get('item_id') 수정
+  - 변수명 통일 (qoo10_cat, qoo10_brand, sell_price 등)
+  - generate_qoo10_excel 함수 통합 (등록코드 제외 로직 포함)
+  - 약기법 필터, 50컬럼, $$ 구분자, 상품명 50자 제한
 """
 
 import json
@@ -44,7 +40,12 @@ except ImportError:
 
 
 # ── 상수 ──────────────────────────────────────────────────────
-QOO10_KSE_SHIPPING_CODE = "KSE01"
+# ★ v0.9.4: 배송비 코드 → 환경변수에서 숫자 코드 읽기
+QOO10_KSE_SHIPPING_CODE = os.environ.get("QOO10_KSE_SHIPPING_CODE", "813137")
+
+# ★ v0.9.4: V/W열 글자 제한
+HEADER_MAX_LEN = 2500
+FOOTER_MAX_LEN = 2500
 
 # 공식 50컬럼 헤더 (A~AX)
 OFFICIAL_HEADERS = [
@@ -146,15 +147,15 @@ BRAND_MAP = {
     "DR.JART+": "QBR00015",
 }
 
-# ── 무게 매핑 ────────────────────────────────────────────────
-WEIGHT_MAP = {
+# ── 무게 매핑 (g 단위 내부 관리) ─────────────────────────────
+WEIGHT_MAP_G = {
     "100000043": 300,
     "100000044": 200,
     "100000045": 200,
     "100000046": 400,
     "100000047": 350,
 }
-DEFAULT_WEIGHT = 300
+DEFAULT_WEIGHT_G = 300
 
 # ── 상품명 금지 키워드 (큐텐 정책) ────────────────────────────
 FORBIDDEN_PROMO_WORDS = [
@@ -172,6 +173,17 @@ FORBIDDEN_PROMO_WORDS = [
 # 헬퍼 함수
 # ══════════════════════════════════════════════════════════════
 
+def _safe_str(value) -> str:
+    """bytes나 비문자열 타입을 안전하게 str로 변환"""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return ""
+    if isinstance(value, float) and (value != value):  # NaN 체크
+        return ""
+    return str(value) if not isinstance(value, str) else value
+
+
 def _match_qoo10_category(item: dict) -> str:
     """상품의 카테고리를 Qoo10 카테고리 번호로 매핑"""
     category = item.get("category", "")
@@ -184,25 +196,88 @@ def _match_brand_code(item: dict) -> str:
     return BRAND_MAP.get(brand, "")
 
 
-def _get_item_weight(category_code: str) -> int:
-    """카테고리별 기본 무게(g) 반환"""
-    return WEIGHT_MAP.get(category_code, DEFAULT_WEIGHT)
+def _get_item_weight_kg(category_code: str) -> float:
+    """
+    ★ v0.9.4: 카테고리별 무게를 kg 단위로 반환 (소수점 둘째자리)
+    Qoo10 규격: 숫자 2자리 이내, 소수점 둘째자리까지, 최대 30kg
+    """
+    weight_g = WEIGHT_MAP_G.get(category_code, DEFAULT_WEIGHT_G)
+    return round(weight_g / 1000, 2)
 
 
 def _truncate_item_name(name: str, max_len: int = 50) -> str:
     """상품명에서 홍보 문구 제거 후 길이 제한"""
     if not name:
         return ""
-
     for word in FORBIDDEN_PROMO_WORDS:
         name = name.replace(word, "")
-
     name = re.sub(r'\s+', ' ', name).strip()
-
     if len(name) > max_len:
         name = name[:max_len - 1] + "…"
-
     return name
+
+
+def _clean_html(raw_html: str, max_len: int = 2500) -> str:
+    """
+    ★ v0.9.4: HTML 콘텐츠에서 Python 코드 혼입 제거 + 글자 수 제한
+    product_analyzer.py가 header_html에 Python 변수 할당 코드를 포함시키는 버그 대응
+    """
+    if not raw_html:
+        return ""
+    if isinstance(raw_html, bytes):
+        return ""
+
+    # Python 코드 패턴 제거 (marketing_html = "", if marketing_message: 등)
+    python_patterns = [
+        r'#\s*마케팅.*$',
+        r'#\s*리뷰.*$',
+        r'marketing_html\s*=.*$',
+        r'social_proof_html\s*=.*$',
+        r'social_parts\s*=.*$',
+        r'items_str\s*=.*$',
+        r'if\s+marketing_message:.*$',
+        r'if\s+review_highlight:.*$',
+        r'if\s+texture_jp:.*$',
+        r'if\s+reviews_summary.*$',
+        r'if\s+social_parts:.*$',
+        r'for\s+sp\s+in\s+social_parts:.*$',
+        r'items_str\s*\+=.*$',
+        r'social_parts\.append\(.*$',
+        r'marketing_html\s*=\s*\(.*$',
+        r'social_proof_html\s*=\s*\(.*$',
+        r'\+\s*items_str\s*\+.*$',
+    ]
+
+    lines = raw_html.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        stripped = line.strip()
+        is_python = False
+        for pattern in python_patterns:
+            if re.match(pattern, stripped):
+                is_python = True
+                break
+        # 추가: 들여쓰기 + 따옴표로 시작하는 Python 문자열 연결
+        if stripped.startswith("'") and stripped.endswith("'"):
+            # HTML 태그가 포함되어 있으면 유지, 아니면 제거
+            if '<' not in stripped:
+                is_python = True
+        if not is_python:
+            cleaned_lines.append(line)
+
+    result = '\n'.join(cleaned_lines).strip()
+
+    # 글자 수 제한
+    if len(result) > max_len:
+        # HTML 태그가 중간에 잘리지 않도록 마지막 닫힌 태그 위치에서 자름
+        truncated = result[:max_len]
+        last_close = truncated.rfind('>')
+        if last_close > max_len - 200:
+            result = truncated[:last_close + 1]
+        else:
+            result = truncated
+
+    return result
 
 
 def _extract_search_keywords(item: dict, category: str = "") -> str:
@@ -284,7 +359,7 @@ def _save_registered_codes(new_codes: list):
 
 
 # ══════════════════════════════════════════════════════════════
-# 1. Qoo10 엑셀 생성 (v0.9.3 – 통합 & 버그 수정)
+# 1. Qoo10 엑셀 생성 (v0.9.4)
 # ══════════════════════════════════════════════════════════════
 
 def generate_qoo10_excel(items: list) -> BytesIO:
@@ -330,6 +405,8 @@ def generate_qoo10_excel(items: list) -> BytesIO:
     brand_matched = 0
     weight_stats = {}
     yakujiho_stats = 0
+    thumb_fallback_count = 0
+    html_truncated_count = 0
 
     for row_idx, item in enumerate(items, 2):
         # 카테고리
@@ -341,14 +418,32 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         if qoo10_brand:
             brand_matched += 1
 
-        # 무게
-        weight = _get_item_weight(qoo10_cat)
-        weight_stats[weight] = weight_stats.get(weight, 0) + 1
+        # ★ v0.9.4: 무게 (kg 단위)
+        weight_kg = _get_item_weight_kg(qoo10_cat)
+        weight_key = str(weight_kg)
+        weight_stats[weight_key] = weight_stats.get(weight_key, 0) + 1
 
-        # 이미지
+        # ★ v0.9.4: 이미지 — 로컬 경로면 원본 URL로 폴백
         thumbnail = item.get("thumbnail", "") or item.get("image_url", "")
+        thumb_processed = item.get("thumbnail_processed", "")
+
+        if isinstance(thumb_processed, bytes):
+            thumb_processed = ""
+
+        if thumb_processed and isinstance(thumb_processed, str) and thumb_processed.startswith("http"):
+            main_image = thumb_processed
+        elif thumbnail and isinstance(thumbnail, str) and thumbnail.startswith("http"):
+            main_image = thumbnail
+            if thumb_processed:
+                thumb_fallback_count += 1
+                logger.debug(f"[이미지] 로컬 경로 → 원본 URL 폴백: {thumb_processed}")
+        else:
+            main_image = ""
+
         detail_images = item.get("detail_images", [])
-        other_images = "$$".join(detail_images[:20]) if detail_images else ""
+        other_images = "$$".join(
+            [img for img in detail_images[:20] if isinstance(img, str) and img.startswith("http")]
+        ) if detail_images else ""
 
         # 옵션
         detail = item.get("detail_info", {})
@@ -380,9 +475,16 @@ def generate_qoo10_excel(items: list) -> BytesIO:
         # 검색어 (약기법 필터 포함)
         search_kw = _extract_search_keywords(item, qoo10_cat)
 
-        # header_html, footer_html
-        header_html = item.get("header_html", "")
-        footer_html = item.get("footer_html", "")
+        # ★ v0.9.4: header_html, footer_html — Python 코드 제거 + 2,500자 제한
+        raw_header = item.get("header_html", "")
+        raw_footer = item.get("footer_html", "")
+        header_html = _clean_html(raw_header, HEADER_MAX_LEN)
+        footer_html = _clean_html(raw_footer, FOOTER_MAX_LEN)
+
+        if raw_header and len(raw_header) > HEADER_MAX_LEN:
+            html_truncated_count += 1
+        if raw_footer and len(raw_footer) > FOOTER_MAX_LEN:
+            html_truncated_count += 1
 
         # seller_unique_item_id
         seller_uid = f"KJ{item.get('item_id', '') or item.get('product_id', '')}"
@@ -405,15 +507,15 @@ def generate_qoo10_excel(items: list) -> BytesIO:
             option_str,                                 # N  option_info
             '',                                         # O  additional_option_info
             '',                                         # P  additional_option_text
-            item.get('thumbnail_processed', '') or thumbnail,  # Q  image_main_url
+            main_image,                                 # Q  image_main_url ★ v0.9.4
             other_images,                               # R  image_other_url
             '',                                         # S  video_url
             '',                                         # T  image_option_info
             '',                                         # U  image_additional_option_info
-            header_html,                                # V  header_html
-            footer_html,                                # W  footer_html
-            item.get('detail_html', ''),                # X  item_description
-            QOO10_KSE_SHIPPING_CODE,                    # Y  Shipping_number
+            header_html,                                # V  header_html ★ v0.9.4
+            footer_html,                                # W  footer_html ★ v0.9.4
+            _safe_str(item.get('detail_html', '')),     # X  item_description
+            QOO10_KSE_SHIPPING_CODE,                    # Y  Shipping_number ★ v0.9.4 (숫자코드)
             '',                                         # Z  option_number
             '3',                                        # AA available_shipping_date
             '7',                                        # AB desired_shipping_date
@@ -424,7 +526,7 @@ def generate_qoo10_excel(items: list) -> BytesIO:
             'KR',                                       # AG origin_country_id
             '',                                         # AH origin_others
             '',                                         # AI medication_type
-            str(weight),                                # AJ item_weight
+            str(weight_kg),                             # AJ item_weight ★ v0.9.4 (kg)
             '',                                         # AK item_material
             '',                                         # AL model_name
             '',                                         # AM external_product_type
@@ -441,6 +543,7 @@ def generate_qoo10_excel(items: list) -> BytesIO:
             '',                                         # AX buy_limit_qty
         ]
 
+        # ★ v0.9.4: 전체 row bytes 방어
         for col, value in enumerate(row_data, 1):
             if isinstance(value, bytes):
                 value = ""
@@ -467,9 +570,13 @@ def generate_qoo10_excel(items: list) -> BytesIO:
     logger.info(f"[엑셀] 브랜드 매칭: {brand_matched}/{len(items)}건")
     if yakujiho_stats > 0:
         logger.info(f"[엑셀] 약기법 필터: 총 {yakujiho_stats}건 키워드 치환")
+    if thumb_fallback_count > 0:
+        logger.info(f"[엑셀] 이미지 폴백: {thumb_fallback_count}건 (로컬경로→원본URL)")
+    if html_truncated_count > 0:
+        logger.info(f"[엑셀] HTML 잘림: {html_truncated_count}건 (2500자 초과)")
     top5_cat = sorted(cat_stats.items(), key=lambda x: -x[1])[:5]
     logger.info(f"[엑셀] 카테고리 TOP5: {dict(top5_cat)}")
-    logger.info(f"[엑셀] 무게 분포: {dict(sorted(weight_stats.items()))}")
+    logger.info(f"[엑셀] 무게 분포(kg): {dict(sorted(weight_stats.items()))}")
 
     return output
 
@@ -598,12 +705,13 @@ if __name__ == "__main__":
             "final_score": 82,
             "grade": "A",
             "thumbnail": "https://example.com/thumb1.jpg",
+            "thumbnail_processed": "artifacts/thumbnails/thumb_12345.jpg",
             "detail_images": [
                 "https://example.com/detail1.jpg",
                 "https://example.com/detail2.jpg",
             ],
             "detail_html": "<div>テスト商品説明</div>",
-            "header_html": "<div style='background:#fdfbf9;'>テスト ヘッダー</div>",
+            "header_html": "<div>テスト ヘッダー</div>",
             "footer_html": "<div>テスト フッター</div>",
             "detail_info": {
                 "option1_name": "容量",
@@ -624,17 +732,19 @@ if __name__ == "__main__":
             "final_score": 75,
             "grade": "B",
             "thumbnail": "https://example.com/thumb2.jpg",
+            "thumbnail_processed": b'\xff\xd8\xff\xe0test_bytes',  # 바이너리 테스트
             "detail_images": [],
-            "detail_html": "<div>アンチエイジング ホワイトニング テスト</div>",
-            "header_html": "",
-            "footer_html": "",
+            "detail_html": "<div>テスト</div>",
+            "header_html": "marketing_html = \"\"\nif marketing_message:\n<div>Real Header</div>",
+            "footer_html": "<div>Real Footer</div>",
             "detail_info": {},
         },
     ]
 
-    print(f"=== uploader_qoo10.py v0.9.3 테스트 ===")
+    print(f"=== uploader_qoo10.py v0.9.4 테스트 ===")
     print(f"헤더 수: {len(OFFICIAL_HEADERS)}컬럼 (A~AX)")
     print(f"약기법 필터 활성화: {YAKUJIHO_ENABLED}")
+    print(f"배송비 코드: {QOO10_KSE_SHIPPING_CODE}")
     print()
 
     excel = generate_qoo10_excel(test_items)
@@ -645,6 +755,11 @@ if __name__ == "__main__":
         print(f"테스트 엑셀 생성 완료: {test_filename}")
         print(f"생성 건수: {len(test_items)}건")
         print()
-        print("약기법 테스트: 두 번째 상품명(ホワイトニング)이 필터링되었는지 확인하세요.")
+        print("검증 포인트:")
+        print("  1. Q열: 로컬 경로 대신 https:// URL이 들어갔는지")
+        print("  2. V/W열: Python 코드 제거 + 2500자 이내인지")
+        print("  3. Y열: 숫자 배송비 코드인지")
+        print("  4. AJ열: kg 단위(0.3 등)인지")
+        print("  5. bytes 값이 빈 문자열로 처리됐는지")
     else:
         print("엑셀 생성 실패 (신규 상품 0건 또는 openpyxl 미설치)")

@@ -254,8 +254,8 @@ def process_thumbnails_batch(items: list) -> list:
         # 썸네일 생성
         result = create_thumbnail(image_bytes, badge_text, bottom_text, oy_badge_text)
 
+        # ★ v1.1: bytes를 파일로 저장, item에는 경로만
         if result:
-            # ★ v1.1: bytes를 파일로 저장, item에는 경로만
             os.makedirs("artifacts/thumbnails", exist_ok=True)
             item_id = item.get("item_id", "") or item.get("product_id", "") or str(idx)
             thumb_filename = f"thumb_{item_id}.jpg"
