@@ -3,7 +3,7 @@ name: Qoo10 JP Beauty Sourcing Pipeline
 on:
   schedule:
     # 매일 한국시간 오전 6시 (UTC 21:00) 실행
-    - cron: '0 21 * * *'
+    - cron: '0 21 * * 0'
   workflow_dispatch:
     # 수동 실행 가능
 
